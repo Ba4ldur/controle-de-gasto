@@ -1,0 +1,1554 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GastosApp — Controle de Gastos Pessoais</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════════
+   VARIÁVEIS & RESET
+═══════════════════════════════════════════════════════════ */
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #22263a;
+  --border: #2e3350;
+  --accent: #6c63ff;
+  --accent2: #ff6584;
+  --green: #43e97b;
+  --yellow: #f7971e;
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --radius: 14px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; scroll-behavior: smooth; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Scrollbar customizada fina dark */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+* { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
+
+/* ═══════════════════════════════════════════════════════════
+   LAYOUT PRINCIPAL
+═══════════════════════════════════════════════════════════ */
+.sidebar {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: 230px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  transition: width 0.25s ease;
+  overflow: hidden;
+}
+.main {
+  margin-left: 230px;
+  min-height: 100vh;
+  transition: margin-left 0.25s ease;
+}
+.page {
+  display: none;
+  padding: 28px 28px 40px;
+  animation: fadeIn 0.2s ease;
+}
+.page.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ═══════════════════════════════════════════════════════════
+   SIDEBAR
+═══════════════════════════════════════════════════════════ */
+.sidebar-logo {
+  padding: 20px 16px 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sidebar-logo svg { flex-shrink: 0; }
+.sidebar-logo-text {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  white-space: nowrap;
+}
+.sidebar-nav {
+  flex: 1;
+  padding: 10px 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--text2);
+  transition: background 0.18s, color 0.18s;
+  white-space: nowrap;
+  user-select: none;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 2px;
+}
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { background: var(--accent); color: #fff; }
+.nav-item svg { flex-shrink: 0; min-width: 20px; }
+.nav-label { font-size: 13px; font-weight: 500; white-space: nowrap; }
+.sidebar-footer {
+  padding: 10px 8px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.notif-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--text2);
+  transition: background 0.18s, color 0.18s;
+  position: relative;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+.notif-btn:hover { background: var(--surface2); color: var(--text); }
+.notif-badge {
+  position: absolute;
+  top: 5px;
+  left: 24px;
+  background: var(--accent2);
+  color: #fff;
+  border-radius: 50%;
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  padding: 0 3px;
+  line-height: 1;
+}
+.sidebar-version {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text2);
+  white-space: nowrap;
+  opacity: 0.7;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TOPBAR DE PÁGINA
+═══════════════════════════════════════════════════════════ */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+.topbar-title {
+  font-size: 22px;
+  font-weight: 700;
+  flex: 1;
+  min-width: 160px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   BOTÕES
+═══════════════════════════════════════════════════════════ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  transition: all 0.18s;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #5a52e0; }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover:not(:disabled) { background: var(--border); }
+.btn-danger { background: rgba(255,101,132,0.12); color: var(--accent2); border: 1px solid rgba(255,101,132,0.3); }
+.btn-danger:hover:not(:disabled) { background: rgba(255,101,132,0.22); }
+.btn-green-soft { background: rgba(67,233,123,0.12); color: var(--green); border: 1px solid rgba(67,233,123,0.3); }
+.btn-green-soft:hover:not(:disabled) { background: rgba(67,233,123,0.22); }
+.btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
+.btn-icon {
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  cursor: pointer;
+  transition: all 0.18s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-icon:hover { color: var(--text); background: var(--border); }
+
+/* ═══════════════════════════════════════════════════════════
+   CARDS DE RESUMO
+═══════════════════════════════════════════════════════════ */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.summary-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  transition: border-color 0.2s;
+}
+.summary-card:hover { border-color: var(--accent); }
+.card-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 10px;
+}
+.card-value {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 4px;
+}
+.card-sub { font-size: 12px; color: var(--text2); }
+.card-red .card-value { color: var(--accent2); }
+.card-green .card-value { color: var(--green); }
+.card-yellow .card-value { color: var(--yellow); }
+.card-accent .card-value { color: var(--accent); }
+.card-positive .card-value { color: var(--green); }
+.card-negative .card-value { color: var(--accent2); }
+
+/* ═══════════════════════════════════════════════════════════
+   WIDGETS
+═══════════════════════════════════════════════════════════ */
+.widgets-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.widget {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+.widget-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 14px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GRÁFICOS
+═══════════════════════════════════════════════════════════ */
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.chart-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+.chart-box-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text);
+}
+.chart-wrap {
+  position: relative;
+  height: 220px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TABELAS
+═══════════════════════════════════════════════════════════ */
+.table-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  margin-bottom: 22px;
+}
+.table-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.table-box-header h3 { font-size: 14px; font-weight: 600; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+tbody td {
+  padding: 11px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: rgba(108,99,255,0.04); cursor: default; }
+tfoot td {
+  padding: 11px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--surface2);
+  border-top: 2px solid var(--border);
+}
+.table-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text2);
+  font-size: 14px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   BADGES
+═══════════════════════════════════════════════════════════ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-green { background: rgba(67,233,123,0.14); color: var(--green); }
+.badge-red { background: rgba(255,101,132,0.14); color: var(--accent2); }
+.badge-yellow { background: rgba(247,151,30,0.14); color: var(--yellow); }
+.badge-blue { background: rgba(59,130,246,0.14); color: #60a5fa; }
+.badge-purple { background: rgba(108,99,255,0.14); color: var(--accent); }
+.badge-gray { background: rgba(148,163,184,0.12); color: var(--text2); }
+
+/* ═══════════════════════════════════════════════════════════
+   BARRA DE PROGRESSO
+═══════════════════════════════════════════════════════════ */
+.progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface2);
+  overflow: hidden;
+  margin: 5px 0;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s cubic-bezier(.4,0,.2,1);
+}
+.prog-green { background: var(--green); }
+.prog-yellow { background: var(--yellow); }
+.prog-red { background: var(--accent2); }
+
+/* ═══════════════════════════════════════════════════════════
+   FORMULÁRIOS
+═══════════════════════════════════════════════════════════ */
+.form-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 140px;
+}
+.form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  white-space: nowrap;
+}
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="password"],
+input[type="email"],
+select,
+textarea {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 11px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.18s;
+  appearance: none;
+  -webkit-appearance: none;
+}
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="date"]:focus,
+input[type="password"]:focus,
+select:focus,
+textarea:focus { border-color: var(--accent); }
+input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.6); cursor: pointer; }
+select option { background: var(--surface2); color: var(--text); }
+textarea { resize: vertical; min-height: 60px; }
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.checkbox-row input[type="checkbox"] {
+  width: 16px; height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.checkbox-row label { font-size: 13px; color: var(--text); cursor: pointer; }
+.input-with-btn { display: flex; gap: 6px; }
+.input-with-btn input { flex: 1; }
+
+/* ═══════════════════════════════════════════════════════════
+   MODAIS
+═══════════════════════════════════════════════════════════ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  backdrop-filter: blur(2px);
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 26px;
+  width: 100%;
+  max-width: 530px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  position: relative;
+  animation: modalIn 0.2s ease;
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.97) translateY(-8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.modal-sm { max-width: 380px; }
+.modal-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 20px;
+  padding-right: 28px;
+}
+.modal-close {
+  position: absolute;
+  top: 20px; right: 20px;
+  background: none;
+  border: none;
+  color: var(--text2);
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.18s;
+}
+.modal-close:hover { color: var(--text); }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.hidden { display: none !important; }
+
+/* ═══════════════════════════════════════════════════════════
+   TOAST SYSTEM
+═══════════════════════════════════════════════════════════ */
+#toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 400;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: var(--shadow);
+  min-width: 260px;
+  max-width: 360px;
+  pointer-events: all;
+  animation: toastIn 0.3s ease;
+}
+.toast.removing { animation: toastOut 0.3s ease forwards; }
+.toast-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.toast-success { border-left: 3px solid var(--green); }
+.toast-error { border-left: 3px solid var(--accent2); }
+.toast-info { border-left: 3px solid var(--accent); }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(40px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(50px); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PAINEL DE ALERTAS
+═══════════════════════════════════════════════════════════ */
+.alerts-panel {
+  position: fixed;
+  bottom: 70px;
+  left: 10px;
+  width: 310px;
+  z-index: 150;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  display: none;
+  max-height: 420px;
+  overflow-y: auto;
+  animation: fadeIn 0.2s ease;
+}
+.alerts-panel.open { display: block; }
+.alerts-panel-header {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.alerts-panel-header span { font-size: 11px; color: var(--text2); font-weight: 400; }
+.alert-item {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.alert-item:last-child { border-bottom: none; }
+.alert-msg { flex: 1; }
+.alert-dismiss {
+  font-size: 11px;
+  color: var(--text2);
+  cursor: pointer;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: inherit;
+  transition: all 0.18s;
+}
+.alert-dismiss:hover { background: var(--surface2); color: var(--text); }
+.no-alerts {
+  text-align: center;
+  padding: 28px 20px;
+  color: var(--text2);
+  font-size: 13px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   FILTROS
+═══════════════════════════════════════════════════════════ */
+.filters-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  align-items: flex-end;
+}
+.filters-row input,
+.filters-row select {
+  flex: 1;
+  min-width: 110px;
+  max-width: 200px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PAGINAÇÃO
+═══════════════════════════════════════════════════════════ */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+}
+.page-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s;
+}
+.page-btn:hover { background: var(--border); color: var(--text); }
+.page-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.page-info { font-size: 12px; color: var(--text2); margin-left: auto; }
+
+/* ═══════════════════════════════════════════════════════════
+   CARDS DE ORÇAMENTO
+═══════════════════════════════════════════════════════════ */
+.budget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+.budget-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow);
+  transition: border-color 0.2s;
+}
+.budget-card:hover { border-color: var(--accent); }
+.budget-cat-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.budget-cat-icon { font-size: 24px; line-height: 1; }
+.budget-cat-name { font-weight: 600; font-size: 14px; flex: 1; }
+.budget-amounts {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text2);
+  margin-top: 6px;
+}
+.budget-pct {
+  font-size: 11px;
+  color: var(--text2);
+  text-align: right;
+  margin-top: 3px;
+}
+.budget-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.budget-edit { margin-top: 10px; }
+
+/* ═══════════════════════════════════════════════════════════
+   CARDS DE METAS
+═══════════════════════════════════════════════════════════ */
+.goals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.goal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  transition: border-color 0.2s;
+}
+.goal-card:hover { border-color: var(--accent); }
+.goal-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.goal-emoji { font-size: 30px; line-height: 1; flex-shrink: 0; }
+.goal-name { font-weight: 700; font-size: 15px; flex: 1; line-height: 1.3; }
+.goal-status-badge { flex-shrink: 0; }
+.goal-progress-text { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+.goal-monthly { font-size: 12px; color: var(--text2); margin-top: 8px; }
+.goal-deadline { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.goal-actions { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+
+/* ═══════════════════════════════════════════════════════════
+   ANÁLISE
+═══════════════════════════════════════════════════════════ */
+.analysis-section { margin-bottom: 32px; }
+.analysis-section-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.highlight-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.highlight-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.highlight-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.highlight-val { font-size: 17px; font-weight: 700; margin-top: 5px; }
+.trend-up { color: var(--accent2); font-weight: 700; }
+.trend-down { color: var(--green); font-weight: 700; }
+.trend-neutral { color: var(--text2); font-weight: 700; }
+
+/* ═══════════════════════════════════════════════════════════
+   CONSULTOR IA / CHAT
+═══════════════════════════════════════════════════════════ */
+.api-key-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 18px;
+}
+.api-key-box label { font-size: 12px; font-weight: 600; color: var(--text2); display: block; margin-bottom: 8px; }
+.api-key-row { display: flex; gap: 8px; align-items: center; }
+.api-key-row input { flex: 1; }
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.chip {
+  padding: 6px 13px;
+  border-radius: 20px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+.chip:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chat-area {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 0;
+}
+.chat-messages {
+  padding: 16px;
+  min-height: 200px;
+  max-height: 420px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-msg {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+.chat-msg.user {
+  background: var(--accent);
+  color: #fff;
+  align-self: flex-end;
+  border-bottom-right-radius: 3px;
+}
+.chat-msg.assistant {
+  background: var(--surface2);
+  color: var(--text);
+  align-self: flex-start;
+  border-bottom-left-radius: 3px;
+  border: 1px solid var(--border);
+}
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  align-items: flex-end;
+}
+.chat-input-row textarea {
+  flex: 1;
+  resize: none;
+  min-height: 40px;
+  max-height: 110px;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.typing-indicator {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 8px 4px;
+}
+.typing-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text2);
+  animation: typingBounce 1.3s infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   IMPORTAR FATURA — UPLOAD ZONE
+═══════════════════════════════════════════════════════════ */
+.upload-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 44px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 22px;
+  position: relative;
+}
+.upload-zone:hover,
+.upload-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(108,99,255,0.06);
+}
+.upload-zone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+.upload-icon { font-size: 42px; line-height: 1; margin-bottom: 12px; }
+.upload-text { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.upload-sub { font-size: 12px; color: var(--text2); }
+
+/* Preview da fatura importada */
+.invoice-preview {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 20px;
+  display: none;
+}
+.invoice-preview.show { display: block; }
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.preview-stat { text-align: center; }
+.preview-stat-val { font-size: 18px; font-weight: 700; }
+.preview-stat-label { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.preview-filename { font-weight: 700; font-size: 15px; flex: 1; }
+
+/* Lista de faturas importadas */
+.invoice-list { margin-top: 28px; }
+.invoice-list-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.invoice-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  gap: 10px;
+}
+.invoice-item-info { flex: 1; }
+.invoice-item-name { font-weight: 600; }
+.invoice-item-meta { font-size: 11px; color: var(--text2); margin-top: 2px; }
+
+/* ═══════════════════════════════════════════════════════════
+   PÁGINA CATEGORIAS
+═══════════════════════════════════════════════════════════ */
+.cat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.cat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 16px;
+  text-align: center;
+  box-shadow: var(--shadow);
+  transition: border-color 0.2s, transform 0.18s;
+}
+.cat-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.cat-icon-big { font-size: 36px; line-height: 1; margin-bottom: 8px; }
+.cat-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+.cat-pct { font-size: 24px; font-weight: 700; margin-bottom: 3px; }
+.cat-val { font-size: 13px; color: var(--text2); margin-bottom: 8px; }
+.cat-count { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.cat-total-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GAUGE / SCORE
+═══════════════════════════════════════════════════════════ */
+.gauge-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RECORRENTES — PIZZA CSS
+═══════════════════════════════════════════════════════════ */
+.recurring-pie-wrap {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.css-pie-chart {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pie-legend { font-size: 12px; color: var(--text2); }
+.pie-legend-item { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.pie-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* ═══════════════════════════════════════════════════════════
+   SEÇÃO DE COMPROMISSOS FIXOS (widget dashboard)
+═══════════════════════════════════════════════════════════ */
+.fixed-list { list-style: none; margin-top: 10px; }
+.fixed-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  gap: 6px;
+}
+.fixed-item:last-child { border-bottom: none; }
+.fixed-item-name { flex: 1; color: var(--text2); truncate: ellipsis; overflow: hidden; white-space: nowrap; }
+.fixed-item-val { font-weight: 600; color: var(--text); flex-shrink: 0; }
+.fixed-total {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LISTA DE METAS WIDGET (dashboard)
+═══════════════════════════════════════════════════════════ */
+.goal-widget-item {
+  margin-bottom: 12px;
+}
+.goal-widget-item:last-child { margin-bottom: 0; }
+.goal-widget-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.goal-widget-name { font-weight: 600; font-size: 13px; }
+.goal-widget-pct { color: var(--text2); }
+
+/* ═══════════════════════════════════════════════════════════
+   INLINE EDIÇÃO ORÇAMENTO
+═══════════════════════════════════════════════════════════ */
+.budget-inline-edit { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.budget-inline-edit input { flex: 1; }
+
+/* ═══════════════════════════════════════════════════════════
+   DIVISOR DE SEÇÃO
+═══════════════════════════════════════════════════════════ */
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 24px 0;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SELECT ANALYSIS CATS
+═══════════════════════════════════════════════════════════ */
+.cat-filter-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.cat-filter-chip {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text2);
+  font-family: inherit;
+  transition: all 0.18s;
+}
+.cat-filter-chip.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESPONSIVO
+═══════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  .sidebar { width: 60px; }
+  .sidebar-logo-text,
+  .nav-label,
+  .sidebar-version { display: none; }
+  .notif-btn .nav-label { display: none; }
+  .main { margin-left: 60px; }
+  .cards-grid { grid-template-columns: repeat(2, 1fr); }
+  .widgets-grid { grid-template-columns: 1fr; }
+  .charts-grid { grid-template-columns: 1fr; }
+  .form-row { flex-direction: column; }
+  .page { padding: 16px; }
+  .highlight-cards { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .cards-grid { grid-template-columns: repeat(2, 1fr); }
+  .topbar { flex-direction: column; align-items: flex-start; }
+  .table-scroll { overflow-x: auto; }
+  .table-scroll table { min-width: 600px; }
+  .modal { padding: 18px; }
+  .filters-row input,
+  .filters-row select { max-width: 100%; }
+  .cat-grid { grid-template-columns: repeat(2, 1fr); }
+  .goals-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SIDEBAR
+═══════════════════════════════════════════════════════════ -->
+<nav class="sidebar" id="sidebar">
+
+  <div class="sidebar-logo">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      <circle cx="14" cy="14" r="14" fill="#6c63ff"/>
+      <path d="M7 17 L14 8 L21 17" fill="none" stroke="white" stroke-width="2" stroke-linejoin="round"/>
+      <rect x="10" y="17" width="8" height="5" rx="1" fill="white"/>
+      <circle cx="14" cy="14" r="2" fill="#6c63ff"/>
+    </svg>
+    <span class="sidebar-logo-text">GastosApp</span>
+  </div>
+
+  <div class="sidebar-nav">
+
+    <!-- Dashboard -->
+    <button class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+      <span class="nav-label">Dashboard</span>
+    </button>
+
+    <!-- Transações -->
+    <button class="nav-item" data-page="transacoes" onclick="navigate('transacoes')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+        <line x1="8" y1="18" x2="21" y2="18"/>
+        <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/>
+        <line x1="3" y1="18" x2="3.01" y2="18"/>
+      </svg>
+      <span class="nav-label">Transações</span>
+    </button>
+
+    <!-- Orçamentos -->
+    <button class="nav-item" data-page="orcamentos" onclick="navigate('orcamentos')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="5" width="20" height="14" rx="2"/>
+        <line x1="2" y1="10" x2="22" y2="10"/>
+      </svg>
+      <span class="nav-label">Orçamentos</span>
+    </button>
+
+    <!-- Metas -->
+    <button class="nav-item" data-page="metas" onclick="navigate('metas')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <circle cx="12" cy="12" r="6"/>
+        <circle cx="12" cy="12" r="2"/>
+      </svg>
+      <span class="nav-label">Metas</span>
+    </button>
+
+    <!-- Análise -->
+    <button class="nav-item" data-page="analise" onclick="navigate('analise')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+        <line x1="6" y1="20" x2="6" y2="14"/>
+        <line x1="2" y1="20" x2="22" y2="20"/>
+      </svg>
+      <span class="nav-label">Análise</span>
+    </button>
+
+    <!-- Consultor IA -->
+    <button class="nav-item" data-page="ia" onclick="navigate('ia')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        <line x1="9" y1="10" x2="9.01" y2="10"/><line x1="12" y1="10" x2="12.01" y2="10"/>
+        <line x1="15" y1="10" x2="15.01" y2="10"/>
+      </svg>
+      <span class="nav-label">Consultor IA</span>
+    </button>
+
+    <!-- Importar Fatura -->
+    <button class="nav-item" data-page="importar" onclick="navigate('importar')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <span class="nav-label">Importar Fatura</span>
+    </button>
+
+    <!-- Categorias -->
+    <button class="nav-item" data-page="categorias" onclick="navigate('categorias')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+        <line x1="7" y1="7" x2="7.01" y2="7"/>
+      </svg>
+      <span class="nav-label">Categorias</span>
+    </button>
+
+  </div><!-- end sidebar-nav -->
+
+  <div class="sidebar-footer">
+    <button class="notif-btn" id="notif-btn" onclick="toggleAlerts()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+      </svg>
+      <span id="notif-badge" class="notif-badge" style="display:none">0</span>
+      <span class="nav-label">Notificações</span>
+    </button>
+    <div class="sidebar-version">v2.0 — dados locais</div>
+  </div>
+
+</nav><!-- end sidebar -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MAIN CONTENT — 8 PÁGINAS
+═══════════════════════════════════════════════════════════ -->
+<main class="main">
+
+  <!-- PAGE: DASHBOARD -->
+  <div id="page-dashboard" class="page active">
+    <div id="db-content"><!-- renderizado por JS --></div>
+  </div>
+
+  <!-- PAGE: TRANSAÇÕES -->
+  <div id="page-transacoes" class="page">
+    <div id="tx-content"><!-- renderizado por JS --></div>
+  </div>
+
+  <!-- PAGE: ORÇAMENTOS -->
+  <div id="page-orcamentos" class="page">
+    <div id="orc-content"><!-- renderizado por JS --></div>
+  </div>
+
+  <!-- PAGE: METAS -->
+  <div id="page-metas" class="page">
+    <div id="metas-content"><!-- renderizado por JS --></div>
+  </div>
+
+  <!-- PAGE: ANÁLISE -->
+  <div id="page-analise" class="page">
+    <div id="analise-content"><!-- renderizado por JS --></div>
+  </div>
+
+  <!-- PAGE: CONSULTOR IA -->
+  <div id="page-ia" class="page">
+    <div id="ia-content"><!-- renderizado por JS --></div>
+  </div>
+
+  <!-- PAGE: IMPORTAR FATURA -->
+  <div id="page-importar" class="page">
+    <div id="importar-content"><!-- renderizado por JS --></div>
+  </div>
+
+  <!-- PAGE: CATEGORIAS -->
+  <div id="page-categorias" class="page">
+    <div id="cat-content"><!-- renderizado por JS --></div>
+  </div>
+
+</main><!-- end main -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     PAINEL DE ALERTAS
+═══════════════════════════════════════════════════════════ -->
+<div class="alerts-panel" id="alerts-panel">
+  <div class="alerts-panel-header">
+    <span>🔔 Alertas</span>
+    <span id="alerts-count-label"></span>
+  </div>
+  <div id="alerts-list">
+    <div class="no-alerts">Nenhum alerta ativo ✓</div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL: ADICIONAR / EDITAR TRANSAÇÃO
+═══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-tx" onclick="handleOverlayClick(event,'modal-tx')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2 class="modal-title" id="modal-tx-title">Nova Transação</h2>
+    <button class="modal-close" onclick="closeModal('modal-tx')">✕</button>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="tx-date">Data</label>
+        <input type="date" id="tx-date">
+      </div>
+      <div class="form-group">
+        <label for="tx-type">Tipo</label>
+        <select id="tx-type">
+          <option value="saida">Saída</option>
+          <option value="entrada">Entrada</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group" style="flex:2">
+        <label for="tx-desc">Descrição</label>
+        <input type="text" id="tx-desc" placeholder="Ex: iFood, Aluguel...">
+      </div>
+      <div class="form-group">
+        <label for="tx-val">Valor (R$)</label>
+        <input type="text" id="tx-val" placeholder="0,00">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="tx-cat">Categoria</label>
+        <select id="tx-cat" class="cat-select-form"></select>
+      </div>
+      <div class="form-group">
+        <label for="tx-invoice">Fatura (opcional)</label>
+        <input type="text" id="tx-invoice" placeholder="Ex: Nubank Fev">
+      </div>
+    </div>
+
+    <div class="checkbox-row">
+      <input type="checkbox" id="tx-recorrente" onchange="toggleFreq()">
+      <label for="tx-recorrente">Transação recorrente</label>
+    </div>
+
+    <div id="freq-row" class="form-row hidden" style="margin-top:10px">
+      <div class="form-group">
+        <label for="tx-freq">Frequência</label>
+        <select id="tx-freq">
+          <option value="mensal">Mensal</option>
+          <option value="semanal">Semanal</option>
+          <option value="anual">Anual</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-tx')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveTx()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        Salvar
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL: DEFINIR / EDITAR ORÇAMENTO
+═══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-budget" onclick="handleOverlayClick(event,'modal-budget')">
+  <div class="modal modal-sm" onclick="event.stopPropagation()">
+    <h2 class="modal-title" id="modal-budget-title">Definir Limite</h2>
+    <button class="modal-close" onclick="closeModal('modal-budget')">✕</button>
+
+    <input type="hidden" id="budget-cat-id">
+
+    <div class="form-group">
+      <label for="budget-limit">Limite mensal (R$)</label>
+      <input type="text" id="budget-limit" placeholder="0,00">
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-budget')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveBudgetLimit()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL: NOVA / EDITAR META
+═══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-goal" onclick="handleOverlayClick(event,'modal-goal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2 class="modal-title" id="modal-goal-title">Nova Meta</h2>
+    <button class="modal-close" onclick="closeModal('modal-goal')">✕</button>
+
+    <input type="hidden" id="goal-id">
+
+    <div class="form-row">
+      <div class="form-group" style="max-width:80px">
+        <label for="goal-emoji">Emoji</label>
+        <input type="text" id="goal-emoji" placeholder="🎯" maxlength="4">
+      </div>
+      <div class="form-group" style="flex:2">
+        <label for="goal-name">Nome da meta</label>
+        <input type="text" id="goal-name" placeholder="Ex: Reserva de emergência">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="goal-target">Valor alvo (R$)</label>
+        <input type="text" id="goal-target" placeholder="10.000,00">
+      </div>
+      <div class="form-group">
+        <label for="goal-current">Valor atual (R$)</label>
+        <input type="text" id="goal-current" placeholder="0,00">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="goal-deadline">Prazo</label>
+        <input type="date" id="goal-deadline">
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-goal')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveGoal()">Salvar Meta</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL: APORTE EM META
+═══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-aporte" onclick="handleOverlayClick(event,'modal-aporte')">
+  <div class="modal modal-sm" onclick="event.stopPropagation()">
+    <h2 class="modal-title" id="modal-aporte-title">Registrar Aporte</h2>
+    <button class="modal-close" onclick="closeModal('modal-aporte')">✕</button>
+
+    <input type="hidden" id="aporte-goal-id">
+
+    <div class="form-group" style="margin-bottom:12px">
+      <label for="aporte-val">Valor (R$)</label>
+      <input type="text" id="aporte-val" placeholder="0,00">
+    </div>
+
+    <div class="form-group">
+      <label for="aporte-note">Observação (opcional)</label>
+      <input type="text" id="aporte-note" placeholder="Ex: Transferido para poupança">
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-aporte')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveAporte()">Registrar</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL: GERAR RELATÓRIO
+═══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-report" onclick="handleOverlayClick(event,'modal-report')">
+  <div class="modal modal-sm" onclick="event.stopPropagation()">
+    <h2 class="modal-title">Gerar Relatório PDF</h2>
+    <button class="modal-close" onclick="closeModal('modal-report')">✕</button>
+
+    <div class="form-group" style="margin-bottom:16px">
+      <label for="report-month">Mês do relatório</label>
+      <select id="report-month" class="month-select"></select>
+    </div>
+
+    <p style="font-size:12px;color:var(--text2);margin-bottom:16px">
+      O relatório será aberto em uma nova aba com todas as análises do mês selecionado.
+    </p>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-report')">Cancelar</button>
+      <button class="btn btn-primary" onclick="doGenerateReport()">
+        📊 Gerar Relatório
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     CONTAINER DE TOASTS
+═══════════════════════════════════════════════════════════ -->
+<div id="toast-container"></div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     JAVASCRIPT — será adicionado nas próximas partes
+═══════════════════════════════════════════════════════════ -->
+<script>
+// placeholder — JS será inserido nas próximas partes
+</script>
+
+</body>
+</html>
