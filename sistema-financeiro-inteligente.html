@@ -7,6 +7,15 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- PDF.js — leitura de PDF no browser -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Tesseract.js — OCR de imagens no browser -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+if(typeof pdfjsLib!=='undefined'){
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -266,6 +275,10 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 .hidden{display:none!important}
+.import-progress{display:flex;align-items:center;gap:12px;padding:14px 18px;background:#1E293B;border:1px solid #334155;border-radius:10px;font-size:13px;color:#94A3B8;margin-top:12px}
+.import-spinner{width:18px;height:18px;border:2px solid #334155;border-top-color:#6366F1;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+.import-tip{font-size:12px;color:#475569;margin-top:10px;line-height:1.5}
+.import-tip strong{color:#64748B}
 </style>
 </head>
 <body>
@@ -994,9 +1007,14 @@ VIEWS.extratos = function(el){
       <div class="dropzone" id="dropzone">
         ${ICONS.upload}
         <h4>Arraste seu extrato aqui</h4>
-        <p>ou clique para escolher (.csv, .ofx, .txt)</p>
-        <input type="file" id="fileInput" accept=".csv,.ofx,.ofc,.txt" style="display:none">
+        <p>ou clique para escolher (.csv, .ofx, .pdf, .png, .jpg)</p>
+        <input type="file" id="fileInput" accept=".csv,.ofx,.ofc,.txt,.pdf,.png,.jpg,.jpeg" style="display:none">
       </div>
+      <div id="import-progress-area" style="display:none" class="import-progress">
+        <div class="import-spinner"></div>
+        <span id="import-progress-msg">Processando arquivo...</span>
+      </div>
+      <p class="import-tip">💡 <strong>PDF e imagens:</strong> o sistema extrai o texto automaticamente. Para melhor resultado, prefira exportar CSV diretamente no app do banco. Imagens por OCR podem levar até 30 segundos.</p>
     </div>
     <div class="card">
       <div class="card-title">${ICONS.info} Como exportar</div>
@@ -1018,9 +1036,30 @@ VIEWS.extratos = function(el){
   fi.onchange=(e)=>{if(e.target.files[0])handleFile(e.target.files[0]);};
 };
 
-function handleFile(file){
+async function handleFile(file){
   const bank=document.getElementById('bankSel').value;
   const account=document.getElementById('accName').value||'Conta';
+  const ext=(file.name.split('.').pop()||'').toLowerCase();
+  // limite de tamanho
+  const MAX_SIZE_MB=15;
+  if(file.size>MAX_SIZE_MB*1024*1024){
+    showToast(`Arquivo muito grande (${(file.size/1024/1024).toFixed(1)} MB). Limite: ${MAX_SIZE_MB} MB.`,'error'); return;
+  }
+  // PDF e imagem usam fluxo assíncrono próprio
+  if(ext==='pdf' || ['png','jpg','jpeg'].includes(ext)){
+    document.getElementById('previewArea').innerHTML=`<div class="card">${skeletonRows(4)}</div>`;
+    showProgressArea(true,'Processando arquivo...');
+    try{
+      const raw = ext==='pdf' ? await parsePDFFile(file) : await parseImageFile(file);
+      finishTextImport(raw, account, bank);
+    }catch(e){
+      console.error('parse pdf/img',e);
+      showToast(e.message||'Erro ao processar o arquivo','error');
+      document.getElementById('previewArea').innerHTML='';
+    }finally{ showProgressArea(false); }
+    return;
+  }
+  // CSV / OFX — fluxo original inalterado
   const reader=new FileReader();
   document.getElementById('previewArea').innerHTML=`<div class="card">${skeletonRows(4)}</div>`;
   reader.onload=()=>{
@@ -1039,6 +1078,249 @@ function handleFile(file){
   };
   reader.onerror=()=>{ showToast('Não consegui ler o arquivo','error'); };
   reader.readAsText(file, 'ISO-8859-1');
+}
+
+function finishTextImport(rawTxs, account, bankSel){
+  if(!rawTxs || rawTxs.length===0){
+    showToast('Nenhuma transação reconhecida no arquivo','error');
+    document.getElementById('previewArea').innerHTML=''; return;
+  }
+  let parsed=rawTxs.map(p=>makeTransaction({...p, account:p.account||account, bank:p.bank||(bankSel==='auto'?'import':bankSel)}));
+  parsed=parsed.filter(p=>p.amount!==0 && p.date);
+  if(parsed.length===0){ showToast('Nenhuma transação válida encontrada','error'); document.getElementById('previewArea').innerHTML=''; return; }
+  IMPORT_PREVIEW=parsed;
+  renderPreview(parsed);
+}
+
+function showProgressArea(show,msg){
+  const area=document.getElementById('import-progress-area');
+  if(area) area.style.display=show?'flex':'none';
+  if(show && msg) showImportProgress(msg);
+}
+function showImportProgress(message){
+  const el=document.getElementById('import-progress-msg');
+  if(el) el.textContent=message;
+}
+
+/* ============================================================
+   IMPORTAÇÃO PDF / IMAGEM (OCR) — texto não estruturado
+   ============================================================ */
+async function parsePDFFile(file){
+  if(typeof pdfjsLib==='undefined') throw new Error('Biblioteca PDF não carregada. Verifique sua conexão e recarregue a página.');
+  let arrayBuffer;
+  try{ arrayBuffer=await file.arrayBuffer(); }
+  catch(e){ throw new Error('Não consegui ler o arquivo PDF.'); }
+  let pdf;
+  try{
+    pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  }catch(err){
+    if(err && err.name==='PasswordException') throw new Error('O PDF está protegido por senha. Remova a senha antes de importar, ou exporte como CSV.');
+    throw new Error(`Erro ao ler o PDF: ${err.message||err}. Tente converter para CSV no seu banco.`);
+  }
+  let fullText='';
+  for(let pageNum=1;pageNum<=pdf.numPages;pageNum++){
+    showImportProgress(`Lendo página ${pageNum} de ${pdf.numPages}...`);
+    const page=await pdf.getPage(pageNum);
+    const textContent=await page.getTextContent();
+    if(!textContent.items.length) continue;
+    fullText+=groupPDFItemsByLine(textContent.items).join('\n')+'\n';
+  }
+  if(!fullText.trim()) throw new Error('O PDF não contém texto selecionável (pode ser escaneado). Salve como PNG e importe como imagem para usar OCR, ou baixe o extrato em CSV no app do banco.');
+  return parseExtractFromText(fullText, file.name, 'pdf');
+}
+
+function groupPDFItemsByLine(items){
+  if(!items||items.length===0) return [];
+  const sorted=[...items].sort((a,b)=>{
+    const yDiff=b.transform[5]-a.transform[5];
+    if(Math.abs(yDiff)>3) return yDiff;
+    return a.transform[4]-b.transform[4];
+  });
+  const lines=[]; let current=[]; let currentY=sorted[0].transform[5];
+  for(const item of sorted){
+    if(Math.abs(item.transform[5]-currentY)>3){
+      if(current.length) lines.push(current.map(i=>i.str).join(' ').trim());
+      current=[item]; currentY=item.transform[5];
+    } else current.push(item);
+  }
+  if(current.length) lines.push(current.map(i=>i.str).join(' ').trim());
+  return lines.filter(l=>l.trim().length>0);
+}
+
+async function parseImageFile(file){
+  if(typeof Tesseract==='undefined') throw new Error('Biblioteca OCR não carregada. Verifique sua conexão e recarregue a página.');
+  showImportProgress('Lendo imagem com OCR... isso pode levar 15-30 segundos.');
+  let result;
+  try{
+    result=await Tesseract.recognize(file,'por',{
+      logger:m=>{ if(m.status==='recognizing text'){ showImportProgress(`OCR em andamento: ${Math.round(m.progress*100)}%`); } }
+    });
+  }catch(err){
+    throw new Error(`Erro no OCR: ${err.message||err}. Tente uma imagem mais nítida ou use CSV.`);
+  }
+  const fullText=result?.data?.text||'';
+  if(fullText.trim().length<20) throw new Error('Não foi possível extrair texto da imagem. Use uma imagem com melhor resolução (mínimo 150 DPI) ou converta para CSV.');
+  const txs=parseExtractFromText(fullText, file.name, 'image');
+  if(txs.length===0) throw new Error('Texto extraído da imagem, mas nenhuma transação foi detectada. Dicas: resolução mínima de 150 DPI, texto legível, fundo sem estampas, e prefira captura de tela a foto.');
+  return txs;
+}
+
+function parseExtractFromText(text, fileName, sourceType){
+  const bank=detectBankFromTextContent(text, fileName);
+  const lines=text.split('\n').map(l=>l.trim()).filter(l=>l.length>2);
+  const parsers={nubank:parseNubankTextLines,itau:parseItauTextLines,bradesco:parseBradescoTextLines,
+    santander:parseSantanderTextLines,bb:parseBBTextLines,inter:parseInterTextLines};
+  let transactions = parsers[bank] ? parsers[bank](lines) : [];
+  if(transactions.length===0) transactions=parseGenericBankTextLines(lines);
+  return transactions.map(t=>({...t, bank:bank||'import', account:bank?bank.charAt(0).toUpperCase()+bank.slice(1):'Importado'}));
+}
+
+function detectBankFromTextContent(text, fileName){
+  const nt=text.toLowerCase(), nn=(fileName||'').toLowerCase();
+  const filePatterns={nubank:['nubank','nu '],itau:['itau','itaú'],bradesco:['bradesco'],santander:['santander'],
+    bb:['banco do brasil','bancodobrasil','bb_'],inter:['inter','bancointer'],c6:['c6bank','c6 bank'],caixa:['caixa','cef']};
+  for(const[bank,pats] of Object.entries(filePatterns)){ if(pats.some(p=>nn.includes(p))) return bank; }
+  const contentPatterns={nubank:['nubank','roxinho','nu pagamentos'],itau:['itaú unibanco','banco itaú','itau s.a'],
+    bradesco:['bradesco','banco bradesco'],santander:['santander','banco santander'],bb:['banco do brasil','bb s.a','agência bb'],
+    inter:['banco inter','bancointer'],c6:['c6 bank','c6bank'],caixa:['caixa econômica','caixa economica','cef']};
+  for(const[bank,pats] of Object.entries(contentPatterns)){ if(pats.some(p=>nt.includes(p))) return bank; }
+  return null;
+}
+
+/* ---- parsers de texto por banco (retornam {date,description,amount}) ---- */
+function rawTx(date, description, amount){
+  return {date, description:String(description||'').substring(0,200), amount};
+}
+function parseValueBR(str){
+  if(!str) return NaN;
+  str=str.toString().replace(/R\$\s*/g,'').replace(/\s/g,'').trim();
+  const neg=str.startsWith('-'); str=str.replace(/^-/,'');
+  let num;
+  if(/\d,\d{2}$/.test(str)) num=parseFloat(str.replace(/\./g,'').replace(',','.'));
+  else if(/\d\.\d{2}$/.test(str)) num=parseFloat(str.replace(/,/g,''));
+  else num=parseFloat(str.replace(',','.'));
+  return neg?-num:num;
+}
+function normalizeDateString(dateStr){
+  if(!dateStr) return null;
+  dateStr=dateStr.trim();
+  let m=dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if(m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m=dateStr.match(/^(\d{2})\/(\d{2})\/(\d{2})$/); if(m){ const y=parseInt(m[3])>50?`19${m[3]}`:`20${m[3]}`; return `${y}-${m[2]}-${m[1]}`; }
+  if(/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  const months={jan:'01',fev:'02',mar:'03',abr:'04',mai:'05',jun:'06',jul:'07',ago:'08',set:'09',out:'10',nov:'11',dez:'12'};
+  m=dateStr.match(/^(\d{2})\s+(\w{3})\.?\s+(\d{4})$/i);
+  if(m){ const mo=months[m[2].toLowerCase().substring(0,3)]; if(mo) return `${m[3]}-${mo}-${m[1]}`; }
+  return null;
+}
+function parseNubankTextLines(lines){
+  const out=[];
+  for(const line of lines){
+    if(/total|saldo|fatura|vencimento|limite|nubank/i.test(line)) continue;
+    const m=line.match(/(\d{2}\s+\w{3}\.?\s+\d{4}|\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-R$\s\d.,]+)$/);
+    if(!m) continue;
+    const date=normalizeDateString(m[1].trim()), desc=m[2].trim(), amount=-Math.abs(parseValueBR(m[3].trim()));
+    if(!date||!desc||isNaN(amount)||amount===0) continue;
+    out.push(rawTx(date,desc,amount));
+  }
+  return out;
+}
+function parseItauTextLines(lines){
+  const out=[];
+  for(const line of lines){
+    if(/histórico|saldo|período|extrato|itaú/i.test(line)) continue;
+    const m=line.match(/(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-]?[\d.]+,\d{2})\s+([-]?[\d.]+,\d{2})?/);
+    if(!m) continue;
+    const date=normalizeDateString(m[1]), amount=parseValueBR(m[3]);
+    if(!date||isNaN(amount)||amount===0) continue;
+    out.push(rawTx(date,m[2].trim(),amount));
+  }
+  return out;
+}
+function parseBradescoTextLines(lines){
+  const out=[];
+  for(const line of lines){
+    if(/data|histórico|saldo|bradesco/i.test(line)) continue;
+    const m=line.match(/(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d.]+,\d{2})\s*([CD])?/);
+    if(!m) continue;
+    const date=normalizeDateString(m[1]), abs=parseValueBR(m[3]), amount=(m[4]||'D')==='C'?abs:-abs;
+    if(!date||isNaN(amount)||amount===0) continue;
+    out.push(rawTx(date,m[2].trim(),amount));
+  }
+  return out;
+}
+function parseSantanderTextLines(lines){
+  const out=[];
+  for(const line of lines){
+    if(/data|lançamento|saldo|santander/i.test(line)) continue;
+    const m=line.match(/(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-]?[\d.]+,\d{2})/);
+    if(!m) continue;
+    const date=normalizeDateString(m[1]), amount=parseValueBR(m[3]);
+    if(!date||isNaN(amount)||amount===0) continue;
+    out.push(rawTx(date,m[2].trim(),amount));
+  }
+  return out;
+}
+function parseBBTextLines(lines){
+  const out=[]; let inData=false;
+  for(const line of lines){
+    if(/data.*histórico.*valor/i.test(line)){ inData=true; continue; }
+    if(!inData) continue;
+    if(/banco do brasil|saldo anterior|saldo final/i.test(line)) continue;
+    const m=line.match(/(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d.]+,\d{2})/);
+    if(!m) continue;
+    const date=normalizeDateString(m[1]), desc=m[2].trim();
+    let amount=parseValueBR(m[3]);
+    const isCredit=/recebid|crédit|pix receb|ted receb|doc receb|salário|salario/i.test(desc);
+    if(!isCredit) amount=-amount;
+    if(!date||isNaN(amount)||amount===0) continue;
+    out.push(rawTx(date,desc,amount));
+  }
+  return out;
+}
+function parseInterTextLines(lines){
+  const out=[];
+  for(const line of lines){
+    if(/data|lançamento|banco inter/i.test(line)) continue;
+    const m=line.match(/(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(saída|entrada|débito|crédito)\s+([\d.]+,\d{2})/i);
+    if(!m) continue;
+    const date=normalizeDateString(m[1]), tipo=m[3].toLowerCase(), abs=parseValueBR(m[4]);
+    const isCredit=tipo.includes('entrada')||tipo.includes('crédito')||tipo.includes('credito');
+    const amount=isCredit?abs:-abs;
+    if(!date||isNaN(amount)||amount===0) continue;
+    out.push(rawTx(date,m[2].trim(),amount));
+  }
+  return out;
+}
+function parseGenericBankTextLines(lines){
+  const out=[];
+  const datePatterns=[/(\d{2}\/\d{2}\/\d{4})/,/(\d{2}\/\d{2}\/\d{2})/,/(\d{4}-\d{2}-\d{2})/,
+    /(\d{2}\s+(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\.?\s+\d{4})/i];
+  const valuePatterns=[/R\$\s*-?\s*([\d.,]+)/,/(-?[\d.]+,\d{2})\s*(?:D|C|CR|DB)?$/,/(-?[\d,]+\.\d{2})/];
+  const creditMarkers=['c','cr','crédito','credito','entrada','+'];
+  const debitMarkers=['d','db','débito','debito','saída','saida','-'];
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i], nextLine=lines[i+1]||'';
+    let date=null;
+    for(const p of datePatterns){ const mm=line.match(p); if(mm){ date=normalizeDateString(mm[1]); break; } }
+    if(!date) continue;
+    let amount=null;
+    for(const p of valuePatterns){ const mm=line.match(p); if(mm){ amount=parseValueBR(mm[1]||mm[0]); break; } }
+    if(amount===null){ for(const p of valuePatterns){ const mm=nextLine.match(p); if(mm){ amount=parseValueBR(mm[1]||mm[0]); break; } } }
+    if(amount===null||isNaN(amount)) continue;
+    const ll=line.toLowerCase();
+    const hasCredit=creditMarkers.some(mk=>ll.endsWith(mk)), hasDebit=debitMarkers.some(mk=>ll.endsWith(mk));
+    let isCredit;
+    if(hasCredit) isCredit=true; else if(hasDebit) isCredit=false;
+    else isCredit = amount>0 && !line.includes('-');
+    let description=line;
+    datePatterns.forEach(p=>{ description=description.replace(p,''); });
+    valuePatterns.forEach(p=>{ description=description.replace(p,''); });
+    description=description.replace(/R\$/g,'').replace(/\s+/g,' ').trim();
+    if(!description) description=nextLine.trim()||'Transação importada';
+    const finalAmount=isCredit?Math.abs(amount):-Math.abs(amount);
+    if(Math.abs(finalAmount)>0) out.push(rawTx(date,description,finalAmount));
+  }
+  return out;
 }
 
 function detectDuplicates(parsed){
