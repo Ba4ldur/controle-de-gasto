@@ -681,7 +681,7 @@ function renderOnboarding(el){
 }
 
 function renderDailyBrief(el){
-  const m = currentMonth();
+  const m = getMostRecentDataMonth();
   const txs = inMonth(m);
   const income = sumIncome(txs), expense = sumExpense(txs);
   const balance = income - expense;
@@ -885,15 +885,29 @@ function extractCounterparty(description){
 let CHARTS = {};
 function destroyChart(key){ if(CHARTS[key]){ CHARTS[key].destroy(); delete CHARTS[key]; } }
 
+function getMostRecentDataMonth(){
+  const cm=currentMonth();
+  if(DATA.transactions.length===0) return cm;
+  const hasCurrent=DATA.transactions.some(t=>t.date&&t.date.slice(0,7)===cm);
+  if(hasCurrent) return cm;
+  const months=[...new Set(DATA.transactions.map(t=>t.date?t.date.slice(0,7):null).filter(Boolean))].sort().reverse();
+  return months[0]||cm;
+}
+
 VIEWS.painel = function(el){
   if(DATA.transactions.length===0){ emptyState(el,'Nenhum dado ainda','Importe um extrato para ver seu painel.','Importar extrato',()=>navigate('extratos')); return; }
-  const m=currentMonth(), txs=inMonth(m);
+  const m=getMostRecentDataMonth(), txs=inMonth(m);
+  const isCurrent=m===currentMonth();
+  const mLabel=isCurrent?'do mês':`de ${fmtMonth(m)}`;
   const income=sumIncome(txs), expense=sumExpense(txs), balance=income-expense;
   const biggest=txs.filter(t=>t.amount<0).sort((a,b)=>a.amount-b.amount)[0];
   el.innerHTML=`
+  ${!isCurrent?`<div class="card mb" style="border-left:3px solid var(--accent);padding:12px 18px;display:flex;align-items:center;gap:10px">
+    ${ICONS.info}<span class="tiny">Exibindo <b>${fmtMonthLong(m)}</b> — mês mais recente com dados. O mês atual ainda não tem transações importadas.</span>
+  </div>`:''}
   <div class="grid g4" id="dashStats">
-    ${statCard('Entradas do mês', income,'income','income')}
-    ${statCard('Saídas do mês', expense,'expense','expense')}
+    ${statCard('Entradas '+mLabel, income,'income','income')}
+    ${statCard('Saídas '+mLabel, expense,'expense','expense')}
     ${statCard('Saldo', balance, balance>=0?'income':'expense','wallet')}
     ${statCard('Maior gasto', biggest?Math.abs(biggest.amount):0,'warning','fire', biggest?truncate(biggest.description,22):'—')}
   </div>
@@ -1247,13 +1261,54 @@ function normalizeDateString(dateStr){
 }
 function parseNubankTextLines(lines){
   const out=[];
-  for(const line of lines){
-    if(/total|saldo|fatura|vencimento|limite|nubank/i.test(line)) continue;
-    const m=line.match(/(\d{2}\s+\w{3}\.?\s+\d{4}|\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-R$\s\d.,]+)$/);
-    if(!m) continue;
-    const date=normalizeDateString(m[1].trim()), desc=m[2].trim(), amount=-Math.abs(parseValueBR(m[3].trim()));
-    if(!date||!desc||isNaN(amount)||amount===0) continue;
-    out.push(rawTx(date,desc,amount));
+  let currentSign=null;
+  let currentDate=null;
+  const months={jan:'01',fev:'02',mar:'03',abr:'04',mai:'05',jun:'06',jul:'07',ago:'08',set:'09',out:'10',nov:'11',dez:'12'};
+  function parseNubankDate(d,m,y){ const mo=months[m.toLowerCase().substring(0,3)]; return mo?`${y}-${mo}-${d.padStart(2,'0')}`:null; }
+  const reIgnorar=/saldo\s+(inicial|final)|rendimento|fatura|vencimento|^nubank$|agência|cpf|cnpj|extrato\s+gerado|ouvidoria|atendimento|tem\s+alguma/i;
+  const reEntradas=/total\s+de\s+entradas/i;
+  const reSaidas=/total\s+de\s+sa[ií]das/i;
+  const reValorSozinho=/^[-]?R?\$?\s*[\d.]+,\d{2}$/;
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i].trim();
+    if(!line||reIgnorar.test(line)) continue;
+    const md=line.match(/^(\d{2})\s+(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\.?\s+(\d{4})$/i);
+    if(md){ currentDate=parseNubankDate(md[1],md[2],md[3]); currentSign=null; continue; }
+    if(reEntradas.test(line)){ currentSign=1; continue; }
+    if(reSaidas.test(line)){ currentSign=-1; continue; }
+    if(currentDate && currentSign!==null && reValorSozinho.test(line)){
+      const abs=Math.abs(parseValueBR(line));
+      if(!isNaN(abs)&&abs>0){
+        let desc='Transferência';
+        for(let j=i-1;j>=Math.max(0,i-4);j--){
+          const prev=lines[j].trim();
+          if(prev&&!/^(\d{2})\s+(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)/i.test(prev)&&!reEntradas.test(prev)&&!reSaidas.test(prev)&&!reValorSozinho.test(prev)&&!reIgnorar.test(prev)){
+            desc=prev.substring(0,120); break;
+          }
+        }
+        out.push(rawTx(currentDate,desc,currentSign*abs));
+      }
+      continue;
+    }
+    const mt=line.match(/^(\d{2})\s+(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\.?\s+(\d{4})\s+(.+?)\s+([-R$\s\d.,]+)$/i);
+    if(mt){
+      const date=parseNubankDate(mt[1],mt[2],mt[3]);
+      const desc=mt[4].trim(), raw=parseValueBR(mt[5].trim());
+      if(date&&desc&&!isNaN(raw)&&raw!==0){
+        const amount=currentSign!==null?currentSign*Math.abs(raw):raw;
+        out.push(rawTx(date,desc,amount));
+      }
+    }
+  }
+  if(out.length===0){
+    for(const line of lines){
+      if(/saldo|fatura|vencimento|nubank|extrato|rendimento/i.test(line)) continue;
+      const m=line.match(/(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-R$\s\d.,]+)$/);
+      if(!m) continue;
+      const date=normalizeDateString(m[1].trim()), desc=m[2].trim(), amount=parseValueBR(m[3].trim());
+      if(!date||!desc||isNaN(amount)||amount===0) continue;
+      out.push(rawTx(date,desc,amount));
+    }
   }
   return out;
 }
