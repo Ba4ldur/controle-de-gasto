@@ -1008,7 +1008,7 @@ VIEWS.extratos = function(el){
         ${ICONS.upload}
         <h4>Arraste seu extrato aqui</h4>
         <p>ou clique para escolher (.csv, .ofx, .pdf, .png, .jpg)</p>
-        <input type="file" id="fileInput" accept=".csv,.ofx,.ofc,.txt,.pdf,.png,.jpg,.jpeg" style="display:none">
+        <input type="file" id="fileInput" accept=".csv,.ofx,.ofc,.txt,.pdf,.png,.jpg,.jpeg" multiple style="display:none">
       </div>
       <div id="import-progress-area" style="display:none" class="import-progress">
         <div class="import-spinner"></div>
@@ -1032,64 +1032,82 @@ VIEWS.extratos = function(el){
   dz.onclick=()=>fi.click();
   dz.ondragover=(e)=>{e.preventDefault();dz.classList.add('drag');};
   dz.ondragleave=()=>dz.classList.remove('drag');
-  dz.ondrop=(e)=>{e.preventDefault();dz.classList.remove('drag');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0]);};
-  fi.onchange=(e)=>{if(e.target.files[0])handleFile(e.target.files[0]);};
+  dz.ondrop=(e)=>{e.preventDefault();dz.classList.remove('drag');if(e.dataTransfer.files.length)handleFiles(e.dataTransfer.files);};
+  fi.onchange=(e)=>{if(e.target.files.length)handleFiles(e.target.files);};
 };
 
-async function handleFile(file){
-  const bank=document.getElementById('bankSel').value;
-  const account=document.getElementById('accName').value||'Conta';
-  const ext=(file.name.split('.').pop()||'').toLowerCase();
-  // limite de tamanho
-  const MAX_SIZE_MB=15;
-  if(file.size>MAX_SIZE_MB*1024*1024){
-    showToast(`Arquivo muito grande (${(file.size/1024/1024).toFixed(1)} MB). Limite: ${MAX_SIZE_MB} MB.`,'error'); return;
-  }
-  // PDF e imagem usam fluxo assíncrono próprio
-  if(ext==='pdf' || ['png','jpg','jpeg'].includes(ext)){
-    document.getElementById('previewArea').innerHTML=`<div class="card">${skeletonRows(4)}</div>`;
-    showProgressArea(true,'Processando arquivo...');
-    try{
-      const raw = ext==='pdf' ? await parsePDFFile(file) : await parseImageFile(file);
-      finishTextImport(raw, account, bank);
-    }catch(e){
-      console.error('parse pdf/img',e);
-      showToast(e.message||'Erro ao processar o arquivo','error');
-      document.getElementById('previewArea').innerHTML='';
-    }finally{ showProgressArea(false); }
-    return;
-  }
-  // CSV / OFX — fluxo original inalterado
-  const reader=new FileReader();
-  document.getElementById('previewArea').innerHTML=`<div class="card">${skeletonRows(4)}</div>`;
-  reader.onload=()=>{
-    try{
-      const text=reader.result;
-      let parsed=[];
-      const isOFX = bank==='ofx' || /<OFX>|<STMTTRN>/i.test(text);
-      if(isOFX) parsed=parseOFX(text);
-      else parsed=parseCSVBank(text, bank);
-      parsed=parsed.map(p=>makeTransaction({...p,account,bank:bank==='auto'?'csv':bank}));
-      parsed=parsed.filter(p=>p.amount!==0 && p.date);
-      if(parsed.length===0){ showToast('Nenhuma transação reconhecida neste arquivo','error'); document.getElementById('previewArea').innerHTML=''; return; }
-      IMPORT_PREVIEW=parsed;
-      renderPreview(parsed);
-    }catch(e){ console.error('parse',e); showToast('Erro ao ler o arquivo. Verifique o formato.','error'); document.getElementById('previewArea').innerHTML=''; }
-  };
-  reader.onerror=()=>{ showToast('Não consegui ler o arquivo','error'); };
-  reader.readAsText(file, 'ISO-8859-1');
+function readFileText(file){
+  return new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>resolve(r.result);
+    r.onerror=()=>reject(new Error('Não consegui ler o arquivo'));
+    r.readAsText(file,'ISO-8859-1');
+  });
 }
 
-function finishTextImport(rawTxs, account, bankSel){
-  if(!rawTxs || rawTxs.length===0){
-    showToast('Nenhuma transação reconhecida no arquivo','error');
-    document.getElementById('previewArea').innerHTML=''; return;
+// Extrai transações brutas {date,description,amount} de QUALQUER formato suportado.
+async function extractRawFromFile(file, bank){
+  const ext=(file.name.split('.').pop()||'').toLowerCase();
+  if(ext==='pdf') return await parsePDFFile(file);
+  if(['png','jpg','jpeg'].includes(ext)) return await parseImageFile(file);
+  // CSV / OFX — lógica original inalterada
+  const text=await readFileText(file);
+  const isOFX = bank==='ofx' || /<OFX>|<STMTTRN>/i.test(text);
+  return isOFX ? parseOFX(text) : parseCSVBank(text, bank);
+}
+
+// Processa MÚLTIPLOS arquivos SEQUENCIALMENTE (necessário para PDF.js/Tesseract).
+async function handleFiles(fileList){
+  const files=Array.from(fileList);
+  const bank=document.getElementById('bankSel').value;
+  const account=document.getElementById('accName').value||'Conta';
+  const MAX_SIZE_MB=15;
+  document.getElementById('previewArea').innerHTML=`<div class="card">${skeletonRows(4)}</div>`;
+  showProgressArea(true,'Processando arquivos...');
+
+  const accumulated=[]; const seenHashes=new Set();
+  const summary={files:0, imported:0, intraDup:0, errors:[]};
+
+  for(let i=0;i<files.length;i++){
+    const file=files[i];
+    showImportProgress(`Processando arquivo ${i+1} de ${files.length}: ${file.name}`);
+    try{
+      if(file.size>MAX_SIZE_MB*1024*1024)
+        throw new Error(`arquivo muito grande (${(file.size/1024/1024).toFixed(1)} MB, limite ${MAX_SIZE_MB} MB)`);
+      const rawTxs=await extractRawFromFile(file, bank);
+      let parsed=(rawTxs||[]).map(p=>makeTransaction({...p, account:p.account||account, bank:p.bank||(bank==='auto'?'import':bank)}))
+        .filter(p=>p.amount!==0 && p.date);
+      if(parsed.length===0){ summary.errors.push({file:file.name, error:'nenhuma transação reconhecida'}); summary.files++; continue; }
+      // deduplicação dentro do lote
+      for(const t of parsed){
+        const h=txHash(t);
+        if(seenHashes.has(h)){ summary.intraDup++; continue; }
+        seenHashes.add(h); accumulated.push(t);
+      }
+      summary.files++;
+    }catch(e){
+      console.error(`Erro ao processar ${file.name}:`,e);
+      summary.errors.push({file:file.name, error:e.message||'erro desconhecido'});
+      summary.files++;
+    }
   }
-  let parsed=rawTxs.map(p=>makeTransaction({...p, account:p.account||account, bank:p.bank||(bankSel==='auto'?'import':bankSel)}));
-  parsed=parsed.filter(p=>p.amount!==0 && p.date);
-  if(parsed.length===0){ showToast('Nenhuma transação válida encontrada','error'); document.getElementById('previewArea').innerHTML=''; return; }
-  IMPORT_PREVIEW=parsed;
-  renderPreview(parsed);
+  showProgressArea(false);
+
+  if(accumulated.length===0){
+    document.getElementById('previewArea').innerHTML='';
+    const msg = summary.errors.length ? `Nenhuma transação importada. ${summary.errors[0].file}: ${summary.errors[0].error}` : 'Nenhuma transação reconhecida nos arquivos.';
+    showToast(msg,'error',6000);
+    return;
+  }
+  summary.imported=accumulated.length;
+  // resumo consolidado
+  let parts=[`${summary.files} arquivo${summary.files>1?'s':''} processado${summary.files>1?'s':''}`, `${summary.imported} lançamentos`];
+  if(summary.intraDup) parts.push(`${summary.intraDup} duplicata${summary.intraDup>1?'s':''} ignorada${summary.intraDup>1?'s':''}`);
+  showToast(parts.join(' · '), summary.errors.length?'warning':'success', 5000);
+  summary.errors.forEach(er=>showToast(`${er.file}: ${er.error}`,'error',6000));
+
+  IMPORT_PREVIEW=accumulated;
+  renderPreview(accumulated);
 }
 
 function showProgressArea(show,msg){
@@ -1118,12 +1136,16 @@ async function parsePDFFile(file){
     throw new Error(`Erro ao ler o PDF: ${err.message||err}. Tente converter para CSV no seu banco.`);
   }
   let fullText='';
-  for(let pageNum=1;pageNum<=pdf.numPages;pageNum++){
-    showImportProgress(`Lendo página ${pageNum} de ${pdf.numPages}...`);
-    const page=await pdf.getPage(pageNum);
-    const textContent=await page.getTextContent();
-    if(!textContent.items.length) continue;
-    fullText+=groupPDFItemsByLine(textContent.items).join('\n')+'\n';
+  try{
+    for(let pageNum=1;pageNum<=pdf.numPages;pageNum++){
+      showImportProgress(`Lendo PDF: página ${pageNum} de ${pdf.numPages} — ${file.name}`);
+      const page=await pdf.getPage(pageNum);
+      const textContent=await page.getTextContent();
+      if(textContent.items.length) fullText+=groupPDFItemsByLine(textContent.items).join('\n')+'\n';
+      if(page.cleanup) page.cleanup();
+    }
+  }finally{
+    if(pdf.destroy) await pdf.destroy();
   }
   if(!fullText.trim()) throw new Error('O PDF não contém texto selecionável (pode ser escaneado). Salve como PNG e importe como imagem para usar OCR, ou baixe o extrato em CSV no app do banco.');
   return parseExtractFromText(fullText, file.name, 'pdf');
@@ -1149,14 +1171,25 @@ function groupPDFItemsByLine(items){
 
 async function parseImageFile(file){
   if(typeof Tesseract==='undefined') throw new Error('Biblioteca OCR não carregada. Verifique sua conexão e recarregue a página.');
-  showImportProgress('Lendo imagem com OCR... isso pode levar 15-30 segundos.');
+  showImportProgress(`OCR em andamento: ${file.name}... isso pode levar 15-30 segundos.`);
   let result;
+  // worker próprio por arquivo, encerrado no finally (evita travar na 2ª imagem)
+  let worker=null;
   try{
-    result=await Tesseract.recognize(file,'por',{
-      logger:m=>{ if(m.status==='recognizing text'){ showImportProgress(`OCR em andamento: ${Math.round(m.progress*100)}%`); } }
-    });
+    if(Tesseract.createWorker){
+      worker=await Tesseract.createWorker('por',1,{
+        logger:m=>{ if(m.status==='recognizing text'){ showImportProgress(`OCR (${file.name}): ${Math.round(m.progress*100)}%`); } }
+      });
+      result=await worker.recognize(file);
+    } else {
+      result=await Tesseract.recognize(file,'por',{
+        logger:m=>{ if(m.status==='recognizing text'){ showImportProgress(`OCR (${file.name}): ${Math.round(m.progress*100)}%`); } }
+      });
+    }
   }catch(err){
     throw new Error(`Erro no OCR: ${err.message||err}. Tente uma imagem mais nítida ou use CSV.`);
+  }finally{
+    if(worker && worker.terminate) await worker.terminate();
   }
   const fullText=result?.data?.text||'';
   if(fullText.trim().length<20) throw new Error('Não foi possível extrair texto da imagem. Use uma imagem com melhor resolução (mínimo 150 DPI) ou converta para CSV.');
