@@ -358,8 +358,24 @@ function loadData(){
   }catch(e){ console.error("loadData",e); return defaultData(); }
 }
 function saveData(){
-  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); }
+  try{
+    const serialized=JSON.stringify(DATA);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    checkStorageQuota(serialized.length);
+  }
   catch(e){ console.error("saveData",e); showToast("Erro ao salvar dados","error"); }
+}
+// Warn proactively before the browser silently rejects further writes (~5MB typical limit).
+let _lastQuotaWarnPct=0;
+function checkStorageQuota(byteLen){
+  const LIMIT=5*1024*1024; // 5MB conservative estimate
+  const pct=byteLen/LIMIT*100;
+  if(pct>=90 && _lastQuotaWarnPct<90){
+    showToast(`Armazenamento quase cheio: ${Math.round(byteLen/1024)}KB de ~5MB. Exporte um backup em Ajustes antes de continuar importando.`,'error',9000);
+  } else if(pct>=70 && _lastQuotaWarnPct<70){
+    showToast(`Armazenamento em ${pct.toFixed(0)}% (${Math.round(byteLen/1024)}KB). Considere exportar um backup em Ajustes.`,'warning',7000);
+  }
+  _lastQuotaWarnPct=pct;
 }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).substr(2,5); }
 
@@ -545,6 +561,14 @@ function makeTransaction(o){
   };
 }
 function txHash(t){ return `${t.bank}|${t.date}|${t.amount}|${normalizeText(t.description)}`; }
+/* Count occurrences of each hash already in storage — used for occurrence-aware dedup.
+   This lets two legitimate "same day, same amount, same counterparty" transactions coexist,
+   while still blocking reimport of the exact same file (both occurrences already stored). */
+function buildStoredCounts(){
+  const map=new Map();
+  DATA.transactions.forEach(t=>{ const h=txHash(t); map.set(h,(map.get(h)||0)+1); });
+  return map;
+}
 function detectRecurring(){
   const groups = {};
   DATA.transactions.forEach(t=>{
@@ -1079,8 +1103,10 @@ async function handleFiles(fileList){
   document.getElementById('previewArea').innerHTML=`<div class="card">${skeletonRows(4)}</div>`;
   showProgressArea(true,'Processando arquivos...');
 
-  const accumulated=[]; const seenHashes=new Set();
-  const summary={files:0, imported:0, intraDup:0, errors:[]};
+  // accumulated: all unique (by occurrence) transactions across this batch of files
+  // accumulatedCounts: Map<hash, occurrenceCount> — lets us allow N identical legitimate txs
+  const accumulated=[]; const accumulatedCounts=new Map();
+  const summary={files:0, imported:0, intraDup:0, identicalWarnings:0, errors:[]};
 
   for(let i=0;i<files.length;i++){
     const file=files[i];
@@ -1092,12 +1118,25 @@ async function handleFiles(fileList){
       let parsed=(rawTxs||[]).map(p=>makeTransaction({...p, account:p.account||account, bank:p.bank||(bank==='auto'?'import':bank)}))
         .filter(p=>p.amount!==0 && p.date);
       if(parsed.length===0){ summary.errors.push({file:file.name, error:'nenhuma transação reconhecida'}); summary.files++; continue; }
-      // deduplicação dentro do lote
+      // Occurrence-aware dedup: two identical txs on same day are BOTH kept (they may be
+      // legitimate). A tx is only dropped if its Nth occurrence already exists in accumulated
+      // from a previous file in this batch (true cross-file dup).
+      const fileHashCounts=new Map(); // per-file: how many times each hash appeared so far in THIS file
+      let identicalInFile=0;
       for(const t of parsed){
         const h=txHash(t);
-        if(seenHashes.has(h)){ summary.intraDup++; continue; }
-        seenHashes.add(h); accumulated.push(t);
+        const occInFile=(fileHashCounts.get(h)||0)+1;
+        fileHashCounts.set(h,occInFile);
+        if(occInFile>1) identicalInFile++;
+        const occInAccumulated=accumulatedCounts.get(h)||0;
+        if(occInFile>occInAccumulated){
+          accumulated.push(t);
+          accumulatedCounts.set(h,occInAccumulated+1);
+        } else {
+          summary.intraDup++; // cross-file dup
+        }
       }
+      if(identicalInFile>0) summary.identicalWarnings+=identicalInFile;
       summary.files++;
     }catch(e){
       console.error(`Erro ao processar ${file.name}:`,e);
@@ -1116,9 +1155,12 @@ async function handleFiles(fileList){
   summary.imported=accumulated.length;
   // resumo consolidado
   let parts=[`${summary.files} arquivo${summary.files>1?'s':''} processado${summary.files>1?'s':''}`, `${summary.imported} lançamentos`];
-  if(summary.intraDup) parts.push(`${summary.intraDup} duplicata${summary.intraDup>1?'s':''} ignorada${summary.intraDup>1?'s':''}`);
+  if(summary.intraDup) parts.push(`${summary.intraDup} duplicata${summary.intraDup>1?'s':''} entre arquivos ignorada${summary.intraDup>1?'s':''}`);
   showToast(parts.join(' · '), summary.errors.length?'warning':'success', 5000);
   summary.errors.forEach(er=>showToast(`${er.file}: ${er.error}`,'error',6000));
+  if(summary.identicalWarnings>0){
+    showToast(`Encontradas ${summary.identicalWarnings} transações com data, valor e descrição idênticos no mesmo extrato — todas foram importadas como lançamentos distintos.`,'info',8000);
+  }
 
   IMPORT_PREVIEW=accumulated;
   renderPreview(accumulated);
@@ -1412,8 +1454,17 @@ function parseGenericBankTextLines(lines){
 }
 
 function detectDuplicates(parsed){
-  const existing=new Set(DATA.transactions.map(txHash));
-  return parsed.map(p=>({tx:p, dup:existing.has(txHash(p))}));
+  // Use occurrence counting: a tx is a dup only if its Nth occurrence already exists in storage.
+  // Example: storage has [TxA,TxA]. Incoming [TxA,TxA,TxB] → first two TxA = dup, TxB = new.
+  // Example: storage has [TxA]. Incoming [TxA,TxA] → first TxA = dup, second TxA = NEW.
+  const storedCounts=buildStoredCounts();
+  const batchCounts=new Map();
+  return parsed.map(p=>{
+    const h=txHash(p);
+    const occ=(batchCounts.get(h)||0)+1;
+    batchCounts.set(h,occ);
+    return {tx:p, dup:occ<=(storedCounts.get(h)||0)};
+  });
 }
 function renderPreview(parsed){
   const checked=detectDuplicates(parsed);
@@ -1448,6 +1499,11 @@ function commitImport(checked){
   detectRecurring(); saveData();
   IMPORT_PREVIEW=[];
   showToast(`${toAdd.length} transações importadas`,'success');
+  // Transparency: tell user about auto-investments so hidden-from-view isn't surprising
+  const investCount=toAdd.filter(t=>t.category==='Investimentos').length;
+  if(investCount>0){
+    setTimeout(()=>showToast(`${investCount} transação(ões) categorizadas como Investimentos — aparecem no Painel e Análises.`,'info',7000),500);
+  }
   navigate('painel');
 }
 function skeletonRows(n){ let s=''; for(let i=0;i<n;i++) s+=`<div class="skeleton sk-line" style="width:${60+Math.random()*40}%"></div>`; return s; }
