@@ -354,8 +354,23 @@ function loadData(){
     const raw = localStorage.getItem(STORAGE_KEY);
     if(!raw) return defaultData();
     const parsed = JSON.parse(raw);
-    return Object.assign(defaultData(), parsed, {settings:Object.assign(defaultData().settings, parsed.settings||{})});
+    const data = Object.assign(defaultData(), parsed, {settings:Object.assign(defaultData().settings, parsed.settings||{})});
+    migrateTransactions(data);
+    return data;
   }catch(e){ console.error("loadData",e); return defaultData(); }
+}
+// Backfill campos que consumidores (Consultor, dashboard, relatórios) assumem sempre existir.
+// Sem isso, transações antigas/restauradas de backup sem normalizedDescription/month
+// fariam t.normalizedDescription.includes(...) lançar e travar o fluxo silenciosamente.
+function migrateTransactions(data){
+  (data.transactions||[]).forEach(t=>{
+    if(t.normalizedDescription==null) t.normalizedDescription=normalizeText(t.description||'');
+    if(!t.month) t.month=(t.date||'').slice(0,7);
+    if(t.dayOfWeek==null){ const d=t.date?new Date(t.date+'T12:00:00'):null; t.dayOfWeek=(d&&!isNaN(d))?d.getDay():0; }
+    if(!t.type) t.type=(t.amount>=0?'income':'expense');
+    if(!t.category) t.category='A categorizar';
+    if(t.subcategory==null) t.subcategory='';
+  });
 }
 function saveData(){
   try{
@@ -390,15 +405,16 @@ function fmtMoneyShort(v){
 }
 function fmtDate(iso){ if(!iso) return ''; const [y,m,d]=iso.split('-'); return `${d}/${m}/${y}`; }
 function fmtMonth(m){
-  if(!m) return '';
+  if(!m||typeof m!=='string'||!m.includes('-')) return m||'';
   const [y,mo]=m.split('-');
   const names=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-  return `${names[parseInt(mo,10)-1]}/${y.slice(2)}`;
+  return `${names[parseInt(mo,10)-1]||'?'}/${y.slice(2)}`;
 }
 function fmtMonthLong(m){
+  if(!m||typeof m!=='string'||!m.includes('-')) return m||'';
   const [y,mo]=m.split('-');
   const names=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-  return `${names[parseInt(mo,10)-1]} de ${y}`;
+  return `${names[parseInt(mo,10)-1]||'?'} de ${y}`;
 }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function currentMonth(){ return new Date().toISOString().slice(0,7); }
@@ -1783,7 +1799,10 @@ let consultorLastResult=null;
 
 function parsePeriodFromQuestion(q){
   const now=new Date(), y=now.getFullYear(), cm=now.getMonth();
-  const mnames=['janeiro','fevereiro','março','marco','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+  // q já vem normalizado (sem acentos). Nomes SEM acento para casar; nomes "bonitos" para o rótulo.
+  // (bug anterior: havia 'março' E 'marco' na lista, deslocando todos os meses seguintes em +1)
+  const mnames=['janeiro','fevereiro','marco','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+  const mlabels=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
   // "este mês" / "esse mês"
   if(/este\s*m[eê]s|esse\s*m[eê]s|m[eê]s\s*atual/.test(q)){
     const start=new Date(y,cm,1), end=new Date(y,cm+1,0);
@@ -1804,9 +1823,9 @@ function parsePeriodFromQuestion(q){
   for(let i=0;i<mnames.length;i++){
     const re=new RegExp('\\b'+mnames[i]+'\\b');
     if(re.test(q)){
-      const mo=(i%12); const yr=mo>cm?y-1:y; // se o mês ainda não chegou este ano, usa o anterior
+      const mo=i; const yr=mo>cm?y-1:y; // se o mês ainda não chegou este ano, usa o anterior
       const s=new Date(yr,mo,1), e=new Date(yr,mo+1,0);
-      return {startDate:s.toISOString().slice(0,10), endDate:e.toISOString().slice(0,10), label:`${mnames[i].charAt(0).toUpperCase()+mnames[i].slice(1)} ${yr}`};
+      return {startDate:s.toISOString().slice(0,10), endDate:e.toISOString().slice(0,10), label:`${mlabels[i]} ${yr}`};
     }
   }
   // "este ano" / "ano passado"
@@ -1837,8 +1856,8 @@ function filterTransactions(txs, intent, period){
   let out=txs.filter(t=>t.date>=period.startDate && t.date<=period.endDate);
   if(intent.direction==='income') out=out.filter(t=>t.amount>0);
   else if(intent.direction==='expense') out=out.filter(t=>t.amount<0);
-  if(intent.isPix) out=out.filter(t=>normalizeText(t.description).includes('pix'));
-  if(intent.searchTerm){ const s=normalizeText(intent.searchTerm); out=out.filter(t=>t.normalizedDescription.includes(s)); }
+  if(intent.isPix) out=out.filter(t=>normalizeText(t.description||'').includes('pix'));
+  if(intent.searchTerm){ const s=normalizeText(intent.searchTerm); out=out.filter(t=>(t.normalizedDescription||normalizeText(t.description||'')).includes(s)); }
   return out;
 }
 
@@ -1857,10 +1876,11 @@ function calculateTotals(txs){
 function buildMonthlySummary(txs){
   const map={};
   txs.forEach(t=>{
-    if(!map[t.month]) map[t.month]={month:t.month,label:fmtMonthLong(t.month),income:0,expenses:0,net:0,count:0};
-    if(t.amount>0) map[t.month].income+=t.amount;
-    else map[t.month].expenses+=Math.abs(t.amount);
-    map[t.month].net+=t.amount; map[t.month].count++;
+    const mk=t.month||(t.date||'').slice(0,7)||'?';
+    if(!map[mk]) map[mk]={month:mk,label:fmtMonthLong(mk),income:0,expenses:0,net:0,count:0};
+    if(t.amount>0) map[mk].income+=t.amount;
+    else map[mk].expenses+=Math.abs(t.amount);
+    map[mk].net+=t.amount; map[mk].count++;
   });
   return Object.values(map).sort((a,b)=>a.month.localeCompare(b.month));
 }
@@ -1868,7 +1888,7 @@ function buildMonthlySummary(txs){
 function buildCategorySummary(txs){
   const total=txs.reduce((s,t)=>s+Math.abs(t.amount),0);
   const map={};
-  txs.forEach(t=>{ const k=t.category; if(!map[k]) map[k]={category:k,total:0,count:0}; map[k].total+=Math.abs(t.amount); map[k].count++; });
+  txs.forEach(t=>{ const k=t.category||'A categorizar'; if(!map[k]) map[k]={category:k,total:0,count:0}; map[k].total+=Math.abs(t.amount); map[k].count++; });
   return Object.values(map).map(c=>({...c,percentage:total>0?c.total/total*100:0})).sort((a,b)=>b.total-a.total);
 }
 
