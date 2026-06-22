@@ -1177,10 +1177,25 @@ VIEWS.extratos = function(el){
 function readFileText(file){
   return new Promise((resolve,reject)=>{
     const r=new FileReader();
-    r.onload=()=>resolve(r.result);
+    r.onload=()=>{ try{ resolve(decodeBufferSmart(r.result)); }catch(e){ reject(e); } };
     r.onerror=()=>reject(new Error('Não consegui ler o arquivo'));
-    r.readAsText(file,'ISO-8859-1');
+    r.readAsArrayBuffer(file);
   });
+}
+// Decodifica um ArrayBuffer detectando automaticamente a codificação (UTF-8 x Latin-1/Windows-1252).
+// Não assume codificação fixa: tenta UTF-8 primeiro e só cai para windows-1252 se detectar corrupção.
+function decodeBufferSmart(buf){
+  const bytes=new Uint8Array(buf);
+  let utf8=null;
+  try{ utf8=new TextDecoder('utf-8',{fatal:false}).decode(bytes); }catch(e){ utf8=null; }
+  // Sinais de corrupção: caractere de substituição (�) ou mojibake latino típico
+  // (arquivo Latin-1 sendo lido como UTF-8, ou texto já duplo-codificado).
+  const looksBroken = utf8==null
+    || utf8.indexOf('�')>=0
+    || /Ã£|Ã§|Ã©|Ãª|Ã³|Ã­|Ã¡|Ã |Ãº|Ã´|Ã¢|Ãµ|Ã /.test(utf8);
+  if(!looksBroken) return utf8;
+  try{ return new TextDecoder('windows-1252').decode(bytes); }
+  catch(e){ return utf8!=null?utf8:''; }
 }
 
 // Extrai transações brutas {date,description,amount} de QUALQUER formato suportado.
