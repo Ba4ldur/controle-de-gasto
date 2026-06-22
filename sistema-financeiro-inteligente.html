@@ -345,7 +345,7 @@ function defaultData(){
   return {
     transactions:[], categories:[], budgets:[], goals:[], accounts:[],
     learnedRules:[], correctionLog:[], insights:[],
-    settings:{ apiKey:"", currency:"BRL", monthStart:1, recentQuestions:[], aiDisabled:false }
+    settings:{ apiKey:"", currency:"BRL", monthStart:1, recentQuestions:[], aiDisabled:false, employees:[] }
   };
 }
 let DATA = loadData();
@@ -497,9 +497,9 @@ const CATEGORY_PATTERNS = [
   { pattern:/netflix|spotify|amazon prime|disney|hbo|max |globoplay|deezer|youtube premium|paramount/i, category:"Assinaturas" },
   { pattern:/academia|smartfit|smart fit|bluefit|bodytech|crossfit|pilates/i, category:"Saúde" },
   { pattern:/escola|faculdade|universidade|cursinho|udemy|alura|colegio|mensalidade/i, category:"Educação" },
-  { pattern:/\bluz\b|energia|enel|cemig|cpfl|coelba|eletropaulo|light |celpe|copel/i, category:"Contas" },
-  { pattern:/\bagua\b|saneamento|sabesp|caesb|casan|sanepar|cedae/i, category:"Contas" },
-  { pattern:/internet|\bnet\b|claro|\bvivo\b|\btim\b|\boi\b|giga|telefonica|fibra/i, category:"Contas" },
+  { pattern:/\bluz\b|energia|enel|cemig|cpfl|coelba|eletropaulo|light |celpe|copel/i, category:"Contas", subcategory:"Energia/Luz" },
+  { pattern:/\bagua\b|saneamento|sabesp|caesb|casan|sanepar|cedae/i, category:"Contas", subcategory:"Água" },
+  { pattern:/internet|\bnet\b|claro|\bvivo\b|\btim\b|\boi\b|giga|telefonica|fibra/i, category:"Contas", subcategory:"Internet" },
   { pattern:/aluguel|condominio|iptu|imobiliaria/i, category:"Moradia" },
   { pattern:/posto|combustivel|gasolina|etanol|shell|ipiranga|petrobras|alcool|br mania/i, category:"Transporte" },
   { pattern:/restaurante|lanchonete|pizzaria|hamburg|churrasc|sushi|outback|mcdonald|burger king|bk |subway|habib/i, category:"Alimentação" },
@@ -531,22 +531,45 @@ const CAT_COLORS = {
 };
 function catColor(c){ return CAT_COLORS[c] || '#6366F1'; }
 
+/* ---------- SUBCATEGORIAS ---------- */
+const SUBCATEGORIES = {
+  "Contas": ["Água","Energia/Luz","Internet","Telefone","Gás","Outros"],
+  "Salário": null // especial: usa DATA.settings.employees em vez de lista fixa
+};
+// Retorna array de opções de subcategoria para a categoria, ou null se não houver.
+function getSubcategoryOptions(category){
+  if(category==='Salário') return (DATA.settings.employees||[]).slice();
+  return SUBCATEGORIES[category] || null;
+}
+function categoryHasSub(category){ return category in SUBCATEGORIES; }
+// Tenta casar a descrição com um funcionário cadastrado (nome direto ou via contraparte).
+function matchEmployee(description){
+  const emps=DATA.settings.employees||[]; if(!emps.length) return '';
+  const norm=normalizeText(description);
+  for(const e of emps){ const en=normalizeText(e); if(en && norm.includes(en)) return e; }
+  const cp=normalizeText(extractCounterparty(description));
+  for(const e of emps){ const en=normalizeText(e); if(en && cp && (cp.includes(en)||en.includes(cp))) return e; }
+  return '';
+}
+
 function categorize(description, amount){
   const norm = normalizeText(description);
   // 1. regras aprendidas
   for(const rule of DATA.learnedRules){
-    if(rule.pattern && norm.includes(rule.pattern)) return {category:rule.category, confidence:0.99};
+    if(rule.pattern && norm.includes(rule.pattern)) return {category:rule.category, confidence:0.99, subcategory:rule.subcategory||''};
   }
   // 2. padrões embutidos
   for(const p of CATEGORY_PATTERNS){
     if(p.pattern.test(description) || p.pattern.test(norm)){
-      // se for receita, regras de despesa não fazem sentido em alguns casos
-      return {category:p.category, confidence:0.9};
+      let subcategory = p.subcategory || '';
+      // Salário: tenta identificar o funcionário pela descrição/contraparte
+      if(p.category==='Salário') subcategory = matchEmployee(description);
+      return {category:p.category, confidence:0.9, subcategory};
     }
   }
   // 3. fallback por sinal
-  if(amount>0) return {category:"Renda Extra", confidence:0.4};
-  return {category:"A categorizar", confidence:0.2};
+  if(amount>0) return {category:"Renda Extra", confidence:0.4, subcategory:''};
+  return {category:"A categorizar", confidence:0.2, subcategory:''};
 }
 function learnRule(description, category){
   const norm = normalizeText(description);
@@ -564,17 +587,30 @@ function makeTransaction(o){
   const cat = o.category || categorize(o.description, amount);
   const category = typeof cat==='string'?cat:cat.category;
   const confidence = typeof cat==='string'?0.5:cat.confidence;
+  // subcategoria: usa a explícita (o.subcategory) ou a derivada da auto-categorização
+  const subcategory = o.subcategory!=null ? o.subcategory : (typeof cat==='string'?'':(cat.subcategory||''));
   return {
     id:o.id||uid(), date,
     description:o.description||'(sem descrição)',
     normalizedDescription:normalizeText(o.description),
     amount, type: amount>=0?'income':'expense',
-    category, categoryConfidence:confidence,
+    category, categoryConfidence:confidence, subcategory,
     account:o.account||'Conta', bank:o.bank||'manual',
     month:date.slice(0,7), dayOfWeek:new Date(date+'T12:00:00').getDay(),
     tags:o.tags||[], notes:o.notes||'', isRecurring:!!o.isRecurring,
     recurringGroup:o.recurringGroup||null, manuallyEdited:!!o.manuallyEdited
   };
+}
+// Agrega por subcategoria dentro de uma categoria (somente despesas por padrão).
+function bySubcategory(txs, category){
+  const map={};
+  txs.forEach(t=>{
+    if(t.category!==category) return;
+    if(t.amount>=0) return;
+    const sub=t.subcategory||'(sem subcategoria)';
+    map[sub]=(map[sub]||0)+Math.abs(t.amount);
+  });
+  return Object.entries(map).map(([subcategory,total])=>({subcategory,total})).sort((a,b)=>b.total-a.total);
 }
 function txHash(t){ return `${t.bank}|${t.date}|${t.amount}|${normalizeText(t.description)}`; }
 /* Count occurrences of each hash already in storage — used for occurrence-aware dedup.
@@ -1006,22 +1042,70 @@ function renderDashTable(q){
     <tbody>${txs.map(t=>`<tr>
       <td class="muted" style="white-space:nowrap">${fmtDate(t.date)}</td>
       <td>${escapeHtml(t.description)}${t.isRecurring?` <span class="badge">${ICONS.repeat}</span>`:''}</td>
-      <td><button class="badge" style="cursor:pointer" onclick="editTxCategory('${t.id}')"><span class="cat-dot" style="background:${catColor(t.category)}"></span>${escapeHtml(t.category)}${t.categoryConfidence<0.5?'<span class="conf">?</span>':''}</button></td>
+      <td><button class="badge" style="cursor:pointer" onclick="editTxCategory('${t.id}')"><span class="cat-dot" style="background:${catColor(t.category)}"></span>${escapeHtml(t.category)}${t.subcategory?` <span class="muted">›</span> ${escapeHtml(t.subcategory)}`:''}${t.categoryConfidence<0.5?'<span class="conf">?</span>':''}</button></td>
       <td class="muted tiny">${escapeHtml(t.account)}</td>
       <td class="num ${t.amount>=0?'amt-pos':'amt-neg'}">${t.amount>=0?'+':''}${fmtMoney(t.amount)}</td>
       <td><button class="modal-close" onclick="deleteTx('${t.id}')" title="Excluir">${ICONS.trash}</button></td>
     </tr>`).join('')}</tbody></table></div>`;
+}
+// HTML do campo de subcategoria para uma categoria (vazio se ela não tiver subcategorias).
+function subSelectHtml(category, current){
+  const opts=getSubcategoryOptions(category);
+  if(opts===null && category!=='Salário') return '';
+  if(!categoryHasSub(category)) return '';
+  const isSalary=category==='Salário';
+  const list=(opts||[]);
+  let inner=`<option value="">— selecione —</option>`+
+    list.map(o=>`<option value="${escapeHtml(o)}" ${o===current?'selected':''}>${escapeHtml(o)}</option>`).join('');
+  if(isSalary) inner+=`<option value="__new__">+ Cadastrar novo funcionário</option>`;
+  return `<div class="field"><label>${isSalary?'Funcionário':'Subcategoria'}</label>
+    <select class="select" id="subSel">${inner}</select>
+    ${isSalary && list.length===0?`<p class="tiny muted" style="margin-top:6px">Nenhum funcionário cadastrado ainda — use "+ Cadastrar".</p>`:''}
+  </div>`;
+}
+// Atualiza a área de subcategoria conforme a categoria escolhida e trata o "+ cadastrar".
+function wireSubSelect(ov, currentSub){
+  const catSel=ov.querySelector('#catSel'); const wrap=ov.querySelector('#subWrap');
+  if(!catSel||!wrap) return;
+  const refresh=(sub)=>{ wrap.innerHTML=subSelectHtml(catSel.value, sub); bindSub(); };
+  const bindSub=()=>{
+    const subSel=ov.querySelector('#subSel'); if(!subSel) return;
+    subSel.onchange=()=>{
+      if(subSel.value==='__new__'){
+        // cadastro inline (sem prompt nativo)
+        wrap.innerHTML=`<div class="field"><label>Novo funcionário</label>
+          <div class="row"><input class="input" id="newEmpName" placeholder="Nome do funcionário">
+          <button class="btn btn-primary" id="newEmpAdd" type="button" style="flex:0 0 auto">Adicionar</button></div></div>`;
+        const inp=ov.querySelector('#newEmpName'), btn=ov.querySelector('#newEmpAdd');
+        inp.focus();
+        btn.onclick=()=>{
+          const v=(inp.value||'').trim(); if(!v){ showToast('Digite um nome','warning'); return; }
+          if(!DATA.settings.employees) DATA.settings.employees=[];
+          if(!DATA.settings.employees.includes(v)) DATA.settings.employees.push(v);
+          saveData(); showToast('Funcionário cadastrado','success');
+          refresh(v);
+        };
+        inp.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); btn.click(); } };
+      }
+    };
+  };
+  catSel.addEventListener('change',()=>refresh(''));
+  bindSub();
 }
 function editTxCategory(id){
   const t=DATA.transactions.find(x=>x.id===id); if(!t) return;
   const opts=ALL_CATEGORIES.map(c=>`<option value="${c}" ${c===t.category?'selected':''}>${c}</option>`).join('');
   openModal({title:'Alterar categoria',subtitle:t.description,
     body:`<div class="field"><label>Categoria</label><select class="select" id="catSel">${opts}</select></div>
+    <div id="subWrap">${subSelectHtml(t.category, t.subcategory||'')}</div>
     <p class="tiny muted">O sistema vai aprender com essa correção e aplicar a transações parecidas.</p>`,
+    onMount:(ov)=>wireSubSelect(ov, t.subcategory||''),
     buttons:[{label:'Cancelar',class:'btn-ghost'},{label:'Salvar',class:'btn-primary',onClick:()=>{
       const nc=document.getElementById('catSel').value;
+      const subSel=document.getElementById('subSel');
+      const nsub=subSel && subSel.value!=='__new__' ? subSel.value : (t.category===nc?t.subcategory:'');
       DATA.correctionLog.push({id:t.id,from:t.category,to:nc,date:todayISO()});
-      t.category=nc; t.categoryConfidence=1; t.manuallyEdited=true;
+      t.category=nc; t.subcategory=nsub||''; t.categoryConfidence=1; t.manuallyEdited=true;
       learnRule(t.description,nc); saveData();
       showToast('Categoria atualizada e aprendida','success'); navigate(CURRENT);
     }}]});
@@ -1645,6 +1729,7 @@ VIEWS.analises = function(el){
       }).join('')}
     </div>
   </div>
+  ${renderSubcategoryBreakdown()}
   ${subs.length?`<div class="card mt2">
     <div class="card-title">${ICONS.repeat} Assinaturas e recorrências detectadas</div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Serviço</th><th>Categoria</th><th class="num">Valor mensal</th></tr></thead>
@@ -1657,6 +1742,23 @@ VIEWS.analises = function(el){
   }`;
   drawAnaliseLine(months);
 };
+// Card de detalhamento por subcategoria — só aparece para categorias que têm subcategorias COM dados.
+function renderSubcategoryBreakdown(){
+  const cards=[];
+  Object.keys(SUBCATEGORIES).forEach(cat=>{
+    const subs=bySubcategory(DATA.transactions, cat);
+    if(!subs.length) return;
+    const total=subs.reduce((s,x)=>s+x.total,0);
+    const rows=subs.map(s=>`<div class="list-row">
+      <div class="flex gap"><span class="cat-dot" style="background:${catColor(cat)}"></span>${escapeHtml(s.subcategory)}</div>
+      <div class="right"><div class="tiny muted">${fmtMoney(s.total)}</div>
+        <div class="progress" style="width:120px"><div class="progress-bar" style="width:${total>0?s.total/total*100:0}%;background:${catColor(cat)}"></div></div>
+      </div></div>`).join('');
+    cards.push(`<div class="card"><div class="card-title">${escapeHtml(cat)} <span class="tiny muted">por subcategoria</span></div>${rows}</div>`);
+  });
+  if(!cards.length) return '';
+  return `<div class="section-head mt2"><h2>Detalhamento por subcategoria</h2></div><div class="grid g2">${cards.join('')}</div>`;
+}
 function drawAnaliseLine(months){
   const top3=byCategory(DATA.transactions).slice(0,3).map(c=>c.category);
   const datasets=top3.map((cat,i)=>({
@@ -1849,7 +1951,14 @@ function detectQueryIntent(q){
   merchantPats.forEach(p=>{ if(p.test(q)) searchTerms.push(p.source.replace(/\\/g,'')); });
   if(/pix\s+para|enviei\s+para|transferi\s+para/.test(q)) searchTerms.push('pix');
   const searchTerm=searchTerms[0]||'';
-  return {direction, searchTerm, isRanking, rankingType, isPix, isCategory, hasValueFilter, isAmbiguous:!searchTerm&&direction==='all'&&!isRanking};
+  // subcategoria (água/luz/internet/telefone/gás) — filtra pelo campo subcategory, não pela descrição
+  let subcategory='';
+  const subMap={'agua':'Água','luz':'Energia/Luz','energia':'Energia/Luz','internet':'Internet','telefone':'Telefone','gas':'Gás'};
+  for(const [k,v] of Object.entries(subMap)){ if(new RegExp('\\b'+k+'\\b').test(q)){ subcategory=v; break; } }
+  // funcionário cadastrado mencionado na pergunta
+  let employee='';
+  (DATA.settings.employees||[]).forEach(e=>{ const en=normalizeText(e); if(en && q.includes(en)) employee=e; });
+  return {direction, searchTerm, isRanking, rankingType, isPix, isCategory, subcategory, employee, hasValueFilter, isAmbiguous:!searchTerm&&!subcategory&&!employee&&direction==='all'&&!isRanking};
 }
 
 function filterTransactions(txs, intent, period){
@@ -1858,6 +1967,10 @@ function filterTransactions(txs, intent, period){
   else if(intent.direction==='expense') out=out.filter(t=>t.amount<0);
   if(intent.isPix) out=out.filter(t=>normalizeText(t.description||'').includes('pix'));
   if(intent.searchTerm){ const s=normalizeText(intent.searchTerm); out=out.filter(t=>(t.normalizedDescription||normalizeText(t.description||'')).includes(s)); }
+  // filtro por subcategoria: casa pelo campo subcategory OU pela palavra-chave na descrição (fallback)
+  if(intent.subcategory){ const kw=normalizeText(intent.subcategory.split('/')[0]); out=out.filter(t=>t.subcategory===intent.subcategory || (t.normalizedDescription||'').includes(kw)); }
+  // filtro por funcionário: salário direcionado àquela pessoa
+  if(intent.employee){ const en=normalizeText(intent.employee); out=out.filter(t=>t.subcategory===intent.employee || (t.normalizedDescription||'').includes(en)); }
   return out;
 }
 
@@ -1917,6 +2030,16 @@ function formatFinancialAnswer(result){
   if(dir==='income'){
     html=`<p>Em <b>${escapeHtml(periodLabel)}</b> você <b>recebeu ${fmtMoney(totals.income)}</b> em ${totals.count} transações.</p>`;
     if(counterpartySummary.length) html+=`<p>Principais origens: ${counterpartySummary.slice(0,3).map(c=>`<b>${escapeHtml(c.name)}</b> (${fmtMoney(c.total)})`).join(', ')}.</p>`;
+    return html;
+  }
+  if(filters.employee){
+    html=`<p>Em <b>${escapeHtml(periodLabel)}</b> você pagou <b>${fmtMoney(totals.expenses||totals.income)}</b> para <b>${escapeHtml(filters.employee)}</b> em ${totals.count} lançamento(s).</p>`;
+    if(totals.largest.description) html+=`<p>Maior: <b>${escapeHtml(totals.largest.description)}</b> — ${fmtMoney(totals.largest.amount)} em ${fmtDate(totals.largest.date)}.</p>`;
+    return html;
+  }
+  if(filters.subcategory){
+    html=`<p>Em <b>${escapeHtml(periodLabel)}</b> você gastou <b>${fmtMoney(totals.expenses)}</b> com <b>${escapeHtml(filters.subcategory)}</b> em ${totals.count} transações.</p>`;
+    if(totals.largest.description) html+=`<p>Maior: <b>${escapeHtml(totals.largest.description)}</b> — ${fmtMoney(totals.largest.amount)}.</p>`;
     return html;
   }
   if(filters.searchTerm||filters.isPix){
@@ -2170,9 +2293,16 @@ async function generatePdfReport(config){
   if(config.includeFullTable && config.transactions.length){
     y=checkPageBreak(doc,y,20);
     y=addSectionTitle(doc,'Transações',y);
-    y=addSimpleTable(doc,['Data','Descrição','Categoria','Valor'],
-      config.transactions.slice(0,80).map(t=>[formatDateBR(t.date),truncate(t.description,34),t.category,`${t.amount>=0?'+':''}${formatCurrencyBR(Math.abs(t.amount))}`]),
-      y,{colWidths:[22,75,40,43],align:['left','left','left','right']});
+    const hasSub=config.transactions.some(t=>t.subcategory);
+    if(hasSub){
+      y=addSimpleTable(doc,['Data','Descrição','Categoria','Subcategoria','Valor'],
+        config.transactions.slice(0,80).map(t=>[formatDateBR(t.date),truncate(t.description,28),t.category,truncate(t.subcategory||'',16),`${t.amount>=0?'+':''}${formatCurrencyBR(Math.abs(t.amount))}`]),
+        y,{colWidths:[20,58,34,32,36],align:['left','left','left','left','right']});
+    } else {
+      y=addSimpleTable(doc,['Data','Descrição','Categoria','Valor'],
+        config.transactions.slice(0,80).map(t=>[formatDateBR(t.date),truncate(t.description,34),t.category,`${t.amount>=0?'+':''}${formatCurrencyBR(Math.abs(t.amount))}`]),
+        y,{colWidths:[22,75,40,43],align:['left','left','left','right']});
+    }
   }
 
   // Orçamentos
@@ -2217,8 +2347,9 @@ async function generateConsultorReportFromResult(){
 }
 
 function exportTransactionsToCSV(txs, fileName){
-  const header='Data,Descrição,Categoria,Conta,Valor,Tipo';
-  const rows=txs.map(t=>[t.date,`"${(t.description||'').replace(/"/g,'""')}"`,t.category,t.account,t.amount.toFixed(2),t.type].join(','));
+  const q=(s)=>`"${String(s==null?'':s).replace(/"/g,'""')}"`;
+  const header='Data,Descrição,Categoria,Subcategoria,Conta,Valor,Tipo';
+  const rows=txs.map(t=>[t.date,q(t.description),q(t.category),q(t.subcategory||''),q(t.account),t.amount.toFixed(2),t.type].join(','));
   const blob=new Blob([header+'\n'+rows.join('\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName||'transacoes.csv'; a.click();
 }
@@ -2314,6 +2445,14 @@ VIEWS.ajustes = function(el){
         </div>
         <button class="btn btn-primary" onclick="saveSettings()">${ICONS.check} Salvar</button>
       </div>
+      <div class="card mt2">
+        <div class="card-title">${ICONS.flag} Funcionários <span class="tiny muted">usados na subcategoria de Salário</span></div>
+        <div class="flex gap mb">
+          <input class="input" id="empName" placeholder="Nome do funcionário">
+          <button class="btn btn-primary" style="flex:0 0 auto" onclick="addEmployee()">${ICONS.plus} Adicionar</button>
+        </div>
+        <div id="empList">${renderEmployeeList()}</div>
+      </div>
     </div>
     <div>
       <div class="card">
@@ -2336,6 +2475,42 @@ VIEWS.ajustes = function(el){
     </div>
   </div>`;
 };
+function renderEmployeeList(){
+  const emps=DATA.settings.employees||[];
+  if(!emps.length) return '<p class="tiny muted">Nenhum funcionário cadastrado.</p>';
+  return `<div class="tbl-wrap"><table class="tbl"><tbody>${emps.map((e,i)=>`<tr>
+    <td>${escapeHtml(e)}</td>
+    <td class="right"><button class="btn btn-ghost btn-sm" onclick="editEmployee(${i})">${ICONS.edit}</button>
+    <button class="modal-close" onclick="deleteEmployee(${i})">${ICONS.trash}</button></td></tr>`).join('')}</tbody></table></div>`;
+}
+function addEmployee(){
+  const inp=document.getElementById('empName'); const v=(inp?.value||'').trim();
+  if(!v){ showToast('Digite um nome','warning'); return; }
+  if(!DATA.settings.employees) DATA.settings.employees=[];
+  if(DATA.settings.employees.includes(v)){ showToast('Funcionário já cadastrado','warning'); return; }
+  DATA.settings.employees.push(v); saveData();
+  inp.value=''; document.getElementById('empList').innerHTML=renderEmployeeList();
+  showToast('Funcionário adicionado','success');
+}
+function editEmployee(i){
+  const emps=DATA.settings.employees||[]; const cur=emps[i]; if(cur==null) return;
+  openModal({title:'Editar funcionário',
+    body:`<div class="field"><label>Nome</label><input class="input" id="empEdit" value="${escapeHtml(cur)}"></div>`,
+    buttons:[{label:'Cancelar'},{label:'Salvar',class:'btn-primary',onClick:()=>{
+      const v=(document.getElementById('empEdit').value||'').trim(); if(!v){ showToast('Nome inválido','warning'); return false; }
+      DATA.settings.employees[i]=v; saveData();
+      const box=document.getElementById('empList'); if(box) box.innerHTML=renderEmployeeList();
+      showToast('Funcionário atualizado','success');
+    }}]});
+}
+function deleteEmployee(i){
+  const emps=DATA.settings.employees||[]; const cur=emps[i];
+  confirmModal('Remover funcionário',`Remover "${cur}"? Transações já classificadas mantêm o nome.`,()=>{
+    DATA.settings.employees.splice(i,1); saveData();
+    const box=document.getElementById('empList'); if(box) box.innerHTML=renderEmployeeList();
+    showToast('Funcionário removido','success');
+  });
+}
 function toggleEye(btn){ const inp=document.getElementById('apiKey'); inp.type=inp.type==='password'?'text':'password'; }
 function saveSettings(){
   DATA.settings.apiKey=(document.getElementById('apiKey')?.value||'').trim();
@@ -2356,6 +2531,7 @@ function restoreData(inp){
       const parsed=JSON.parse(r.result);
       if(!parsed.transactions) throw new Error('Arquivo inválido');
       DATA=Object.assign(defaultData(),parsed,{settings:Object.assign(defaultData().settings,parsed.settings||{})});
+      migrateTransactions(DATA);
       saveData(); showToast(`${DATA.transactions.length} transações restauradas`,'success'); navigate('inicio');
     }catch(e){ showToast('Arquivo inválido ou corrompido','error'); }
   };
