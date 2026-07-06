@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block page %}dashboard{% endblock %}
+{% block conteudo %}
+<h1>Visão geral</h1>
+<p class="subtitulo">Entradas, saídas e categorias do período. Transferências
+  internas e movimentos neutros ficam fora do resultado.</p>
+
+<div class="filtros">
+  <div>
+    <label for="filtro-inicio">Início</label>
+    <input type="date" id="filtro-inicio">
+  </div>
+  <div>
+    <label for="filtro-fim">Fim</label>
+    <input type="date" id="filtro-fim">
+  </div>
+  <button class="btn-primario" id="botao-filtrar" type="button">Aplicar</button>
+</div>
+
+<div class="cards-metricas">
+  <div class="card metrica">
+    <div class="rotulo">Receitas</div>
+    <div class="valor" id="m-receitas">—</div>
+  </div>
+  <div class="card metrica">
+    <div class="rotulo">Despesas</div>
+    <div class="valor" id="m-despesas">—</div>
+  </div>
+  <div class="card metrica">
+    <div class="rotulo">Saldo líquido</div>
+    <div class="valor" id="m-saldo">—</div>
+  </div>
+  <div class="card metrica">
+    <div class="rotulo">Tarifas bancárias</div>
+    <div class="valor" id="m-tarifas">—</div>
+  </div>
+  <div class="card metrica">
+    <div class="rotulo">Aguardando revisão</div>
+    <div class="valor" id="m-pendentes">—</div>
+  </div>
+</div>
+
+<div id="alertas"></div>
+
+<div class="card secao">
+  <h2>Despesas por categoria</h2>
+  <div class="barras" id="barras-despesas"></div>
+</div>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block page %}importar{% endblock %}
+{% block conteudo %}
+<h1>Importar extrato</h1>
+<p class="subtitulo">Formatos aceitos: CSV, XLSX e OFX. Revise a
+  pré-visualização antes de confirmar — nada é gravado sem a sua confirmação.</p>
+
+<div class="card" style="max-width:560px">
+  <div>
+    <label for="conta">Conta bancária</label>
+    <select id="conta"></select>
+  </div>
+  <div style="margin-top:16px">
+    <label for="arquivo">Arquivo do extrato</label>
+    <input type="file" id="arquivo" accept=".csv,.xlsx,.ofx,.txt">
+  </div>
+  <div style="margin-top:24px;display:flex;gap:12px">
+    <button class="btn-primario" id="botao-preview" type="button">Pré-visualizar</button>
+    <button class="btn-secundario" id="botao-confirmar" type="button" hidden>Confirmar importação</button>
+  </div>
+</div>
+
+<div id="mensagem" class="mensagem" hidden></div>
+<div id="area-preview"></div>
+{% endblock %}

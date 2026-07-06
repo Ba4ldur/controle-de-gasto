@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ titulo }} — Controle de Gastos Attivare</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body data-page="{% block page %}{% endblock %}">
+  {% block topbar %}
+  <header class="topbar">
+    <span class="marca">Attivare</span>
+    <nav>
+      <a href="/">Visão geral</a>
+      <a href="/transacoes">Transações</a>
+      <a href="/importar">Importar</a>
+      <a href="/importacoes">Importações</a>
+    </nav>
+    <select id="seletor-empresa" aria-label="Empresa ativa"></select>
+    <button class="sair" id="botao-sair" type="button">Sair</button>
+  </header>
+  {% endblock %}
+  <main>
+    {% block conteudo %}{% endblock %}
+    <p class="aviso-rodape">As análises apresentadas são informativas e não
+      constituem aconselhamento financeiro profissional.</p>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

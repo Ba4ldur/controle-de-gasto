@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block page %}transacoes{% endblock %}
+{% block conteudo %}
+<h1>Transações</h1>
+<p class="subtitulo" id="total-transacoes">—</p>
+
+<div class="filtros">
+  <div>
+    <label for="filtro-inicio">Início</label>
+    <input type="date" id="filtro-inicio">
+  </div>
+  <div>
+    <label for="filtro-fim">Fim</label>
+    <input type="date" id="filtro-fim">
+  </div>
+  <div>
+    <label for="filtro-status">Status</label>
+    <select id="filtro-status">
+      <option value="">Todos</option>
+      <option value="pendente_revisao">Aguardando revisão</option>
+      <option value="automatica">Automática</option>
+      <option value="revisada">Revisada</option>
+    </select>
+  </div>
+  <div>
+    <label for="filtro-categoria">Categoria</label>
+    <select id="filtro-categoria"></select>
+  </div>
+  <button class="btn-primario" id="botao-filtrar" type="button">Filtrar</button>
+  <button class="btn-secundario" id="botao-exportar" type="button">Exportar CSV</button>
+</div>
+
+<div class="filtros">
+  <label><input type="checkbox" id="opt-regra"> Criar regra ao corrigir (aplica em importações futuras)</label>
+  <label><input type="checkbox" id="opt-semelhantes" checked> Aplicar correção às transações semelhantes</label>
+</div>
+
+<div id="mensagem" class="mensagem" hidden></div>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Data</th>
+        <th>Descrição</th>
+        <th class="num">Valor</th>
+        <th>Categoria</th>
+        <th class="num">Confiança</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="corpo-transacoes"></tbody>
+  </table>
+</div>
+{% endblock %}
