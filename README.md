@@ -133,6 +133,13 @@ As migrations estão em `supabase/migrations/`:
   acessa seus registros; `admin` acessa todos).
 - `0003_storage.sql` — bucket privado `analysis-documents` e políticas de acesso
   por pasta de usuário.
+- `0004_security_hardening.sql` — impede escalonamento de privilégio (usuário
+  comum não pode se tornar `admin` alterando o próprio `role`) e reforça o insert
+  de documentos (só vincula a empresas/análises do próprio usuário).
+
+> Para tornar um usuário administrador, altere `profiles.role` para `'admin'`
+> diretamente no banco (com a `service_role`/SQL Editor) — a promoção não é
+> possível pela interface nem pela própria conta, por segurança.
 
 **Opção A — Supabase CLI (recomendado):**
 
@@ -174,6 +181,22 @@ enviando o token do usuário logado (a função exige JWT válido —
 
 Se `VITE_DEMO_MODE=true` ou o Supabase não estiver configurado, o frontend não
 chama a função: usa o gerador de exemplo local.
+
+### Configurar a OpenAI
+
+1. Gere uma chave em <https://platform.openai.com/api-keys>.
+2. Defina os segredos no Supabase (nunca no `.env` do frontend):
+
+   ```bash
+   supabase secrets set OPENAI_API_KEY=sk-... OPENAI_MODEL=gpt-4o-mini
+   ```
+
+3. A função usa **Chat Completions com `response_format: json_object`**,
+   `temperature: 0.2` e valida a estrutura do JSON retornado. Se a IA devolver
+   um JSON inválido ou fora do schema, a função **tenta uma vez novamente** com
+   instrução corretiva; persistindo a falha, retorna um erro claro
+   (`code: invalid_ai_response` ou `openai_unavailable`) e o frontend marca a
+   análise como `erro` (não fica presa em "processando").
 
 ---
 

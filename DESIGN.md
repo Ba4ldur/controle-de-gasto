@@ -1,22 +1,25 @@
 <!-- SEED -->
 ---
-name: Controle de Gastos Attivare
-description: Controle de despesas PJ — produto sério e institucional para contadores e clientes da Attivare.
+name: Attivare Reforma Intelligence
+description: Plataforma de diagnóstico preliminar da Reforma Tributária do Consumo — produto sério e institucional para escritórios de contabilidade.
 colors:
-  primary: "#1F5C4A"
-  primary-deep: "#003B2F"
+  primary: "#143968"
+  primary-deep: "#0F2A52"
+  primary-darkest: "#0B1E3B"
   accent-gold: "#C8A96B"
-  neutral-bg: "#F6F8F7"
+  neutral-bg: "#F5F7FA"
   surface: "#FFFFFF"
   border: "#DDE3E0"
   text: "#13201B"
   text-muted: "#586660"
-  success: "#1F5C4A"
-  danger: "#9B2C2C"
+  success: "#1F7A4D"
+  warning: "#B7791F"
+  danger: "#B4293B"
+  info: "#22599E"
 typography:
   display:
     fontFamily: "Inter, system-ui, sans-serif"
-    fontSize: "clamp(1.75rem, 4vw, 2.5rem)"
+    fontSize: "clamp(1.75rem, 4vw, 2.4rem)"
     fontWeight: 600
     lineHeight: 1.15
     letterSpacing: "-0.02em"
@@ -85,65 +88,65 @@ components:
     padding: "10px 12px"
 ---
 
-# Design System: Controle de Gastos Attivare
+# Design System: Attivare Reforma Intelligence
 
 ## 1. Overview
 
-Sistema visual para um produto de **controle de despesas PJ** usado por
-contadores e clientes da Attivare. Register **product**: o design serve à
-tarefa. O tom é profissional, sério e confiável — uma ferramenta de trabalho
-financeira, não um app de consumo.
+Sistema visual para uma plataforma de **diagnóstico preliminar da Reforma
+Tributária do Consumo**, usada por contadores e analistas da Attivare. Register
+**product**: o design serve à tarefa. O tom é profissional, sério e confiável —
+uma ferramenta de trabalho tributário, não um app de consumo.
 
-A marca aparece pela paleta institucional da Attivare (verdes profundos +
-dourado), aplicada com contenção. A hierarquia é construída por tipografia e
+A marca aparece pela paleta institucional (azul escuro executivo + dourado
+discreto), aplicada com contenção. A hierarquia é construída por tipografia e
 espaçamento, não por cor decorativa. Densidade alta de dados, leitura calma.
 
 ## 2. Colors: A Paleta Institucional Attivare
 
-A paleta é dominada por verdes Attivare sobre neutros levemente esverdeados
-(quentes, nunca cinza puro de IA). O dourado é cor de marca e ênfase pontual —
-nunca preenchimento de fundo amplo nem texto corrido.
+A paleta é dominada por **azuis escuros** sobre neutros levemente frios. O
+**dourado** é cor de marca e ênfase pontual — nunca preenchimento de fundo amplo
+nem texto corrido sobre branco.
 
-> Valores no frontmatter são a fonte canônica (hex sRGB, compatível com Stitch).
+> Valores no frontmatter são a fonte canônica (hex sRGB). Espelham
+> `tailwind.config.js`.
 
 ### Primary
 
-- **Verde institucional** `#1F5C4A` — cor primária de ação (botões, links,
-  estados ativos, ícones de marca).
-- **Verde escuro** `#003B2F` — superfícies de marca profundas (sidebar, header,
-  hover do primário, faixas institucionais). Texto claro por cima.
+- **Azul institucional** `#143968` — cor primária de ação (botões, ícones de
+  marca, estados ativos).
+- **Azul profundo** `#0F2A52` / **#0B1E3B** — superfícies de marca (sidebar,
+  capa do relatório, hover do primário). Texto claro por cima.
 
 ### Secondary
 
-- **Dourado** `#C8A96B` — ênfase de marca: detalhes, bordas de destaque,
-  ícones de marca, divisores premium. **Não** usar como cor de texto sobre
-  branco (contraste insuficiente) nem como grande área de fundo.
-
-### Tertiary
-
-Omitido — o produto usa Primary + Secondary + Neutral. Não inventar uma quarta
-família de cor.
+- **Dourado** `#C8A96B` — ênfase de marca: filete do logo, detalhes premium,
+  divisores. **Não** usar como cor de texto sobre branco (contraste
+  insuficiente) nem como grande área de fundo.
 
 ### Neutral
 
-- `#F6F8F7` fundo de aplicação (off-white com leve viés verde).
+- `#F5F7FA` fundo de aplicação (off-white levemente frio).
 - `#FFFFFF` superfícies/cards.
 - `#DDE3E0` bordas e divisores.
-- `#13201B` texto principal (quase-preto esverdeado).
+- `#13201B` texto principal (quase-preto).
 - `#586660` texto secundário/labels.
 
-### Named Rules
+### Semânticos
 
-- **Semânticos:** sucesso reusa o verde institucional `#1F5C4A`; erro/saída usa
-  vermelho contido `#9B2C2C`. Valores negativos/saídas sempre acompanhados de
-  sinal e/ou ícone — nunca comunicados só por cor (WCAG AA).
+Estados de impacto/risco e status usam cores dedicadas, sempre acompanhadas de
+texto ou ícone (nunca só cor — WCAG AA):
+
+- **success/positivo** `#1F7A4D` (impacto baixo, finalizado).
+- **warning/alerta** `#B7791F` (impacto médio, em revisão).
+- **danger/risco** `#B4293B` (impacto alto/crítico, erro).
+- **info** `#22599E` (informativo, processando).
 
 ## 3. Typography
 
 Duas famílias apenas: **Inter** para toda a interface e **Geist Mono** para
-valores monetários e dados numéricos tabulares (alinhamento de colunas com
-`tnum`). Geist Mono nos números reforça precisão e diferencia esta UI do visual
-genérico "Inter em tudo".
+valores numéricos e dados tabulares (alinhamento de colunas com `tnum`). Geist
+Mono nos números reforça precisão e diferencia esta UI do visual genérico
+"Inter em tudo".
 
 ### Hierarchy
 
@@ -152,42 +155,32 @@ genérico "Inter em tudo".
 - **title** — cabeçalhos de card/tabela.
 - **body** — texto corrido e conteúdo de formulário.
 - **label** — rótulos de campo, chips, cabeçalhos de coluna (500, leve tracking).
-- **numeric** — Geist Mono para qualquer valor monetário ou métrica.
-
-### Named Rules
-
-- Todo valor em R$ usa `numeric` com `font-variant-numeric: tabular-nums`.
-- Peso e tamanho carregam a hierarquia; evitar criar hierarquia só com cor.
+- **numeric** — Geist Mono para qualquer métrica ou pontuação (ex.: GUT).
 
 ## 4. Elevation
 
 Elevação discreta e institucional. Estrutura vem de bordas (`#DDE3E0`) antes de
 sombra. Sombras suaves e de baixa opacidade — nada de glow ou sombra colorida.
-
-### Shadow Vocabulary
-
-- **sm** — `0 1px 2px rgba(0,59,47,0.06)` (cards em repouso).
-- **md** — `0 4px 12px rgba(0,59,47,0.10)` (dropdowns, popovers).
-- Sombra usa o verde escuro de marca como base do rgba, não preto puro.
+A base do rgba usa o azul escuro de marca (`rgba(11,30,59,…)`), não preto puro.
 
 ## 5. Components
 
-- **button-primary** — verde institucional, texto branco, raio md; hover escurece
-  para o verde escuro.
-- **button-secondary** — superfície branca, borda, texto verde; para ações
-  secundárias.
+- **button-primary** — azul institucional, texto branco, raio md; hover escurece.
+- **button-secondary** — superfície branca, borda, texto azul; ações secundárias.
 - **card** — superfície branca, raio lg, borda sutil, padding generoso. Não
   aninhar card dentro de card.
-- **input** — borda neutra, foco com anel verde institucional visível (WCAG AA).
-- **table** — para listas de despesas: cabeçalho em `label`, valores em
-  `numeric` alinhados à direita, linhas com divisores `#DDE3E0`.
+- **input** — borda neutra, foco com anel azul visível (WCAG AA).
+- **badge/RiskBadge** — nível de impacto e status com cor semântica + rótulo em
+  PT-BR (nunca só cor).
+- **table** — cabeçalho em `label`; no relatório, tabelas com bordas leves e
+  quebra de página controlada para impressão.
 
 ## 6. Do's and Don'ts
 
 **Do**
 
-- Usar verdes Attivare para marca/ação e dourado só como ênfase pontual.
-- Números monetários em Geist Mono, tabulares, alinhados à direita.
+- Usar azuis Attivare para marca/ação e dourado só como ênfase pontual.
+- Pontuações e métricas (GUT) em Geist Mono, tabulares.
 - Construir hierarquia com tipografia e espaçamento; manter respiro mesmo em
   telas densas.
 - Garantir contraste AA, foco de teclado visível e estado nunca só por cor.
@@ -198,7 +191,7 @@ sombra. Sombras suaves e de baixa opacidade — nada de glow ou sombra colorida.
 - Sem o "kit genérico de IA": Inter sem hierarquia, card dentro de card, ícone
   em quadrado arredondado acima de cada título, texto cinza sobre fundo colorido.
 - Não usar dourado como texto sobre branco nem como grande área de fundo.
-- Sem estética lúdica/B2C; este é um produto financeiro sério.
+- Sem estética lúdica/B2C; este é um produto profissional sério.
 
-<!-- Seed: re-rodar `/impeccable document` quando houver código/tokens reais
-     para capturar os valores efetivos do projeto. -->
+<!-- Seed: reflete a implementação real (tailwind.config.js). Re-rodar
+     `/impeccable document` se os tokens do projeto mudarem. -->

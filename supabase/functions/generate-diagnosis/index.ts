@@ -79,6 +79,57 @@ function normalizeGut(raw: Record<string, unknown>): void {
   raw.gut_matrix = normalized;
 }
 
+/**
+ * Extrai o objeto JSON de um texto, tolerando cercas markdown (```json) e
+ * texto adjacente que o modelo eventualmente inclua.
+ */
+function stripJsonFences(text: string): string {
+  let t = (text ?? '').trim();
+  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(t);
+  if (fence) t = fence[1].trim();
+  const first = t.indexOf('{');
+  const last = t.lastIndexOf('}');
+  if (first !== -1 && last !== -1 && last > first) {
+    t = t.slice(first, last + 1);
+  }
+  return t;
+}
+
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+/** Chama a OpenAI (Chat Completions, resposta JSON) e devolve o conteúdo. */
+async function callOpenAIChat(
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[],
+): Promise<string> {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`API da OpenAI respondeu ${res.status}: ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content ?? '';
+  if (!content) throw new Error('a OpenAI retornou conteúdo vazio.');
+  return content;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -127,54 +178,67 @@ Deno.serve(async (req: Request) => {
     input_text: payload.input_text ?? '',
   });
 
-  // Chamada à OpenAI (Chat Completions com resposta JSON).
-  let content: string;
-  try {
-    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-    });
+  // Chamada à OpenAI com validação e UMA retentativa corretiva quando a
+  // resposta vem malformada (JSON inválido ou fora do schema). Erros de
+  // rede/API não são repetidos (retornam fallback imediato e claro).
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: userPrompt },
+  ];
 
-    if (!openaiRes.ok) {
-      const errText = await openaiRes.text();
-      return json({ error: `Falha na API da OpenAI (${openaiRes.status}): ${errText.slice(0, 500)}` }, 502);
+  const MAX_ATTEMPTS = 2;
+  let lastError = '';
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let content: string;
+    try {
+      content = await callOpenAIChat(apiKey, model, messages);
+    } catch (err) {
+      // Falha de conectividade/API — fallback imediato e explícito.
+      return json(
+        {
+          error: `Não foi possível contatar a IA. ${(err as Error).message}`,
+          code: 'openai_unavailable',
+        },
+        502,
+      );
     }
 
-    const data = await openaiRes.json();
-    content = data?.choices?.[0]?.message?.content ?? '';
-    if (!content) {
-      return json({ error: 'A OpenAI não retornou conteúdo.' }, 502);
+    // Parse tolerante a cercas markdown.
+    let diagnosis: Record<string, unknown> | null = null;
+    try {
+      diagnosis = JSON.parse(stripJsonFences(content)) as Record<string, unknown>;
+    } catch {
+      lastError = 'A IA retornou um JSON inválido.';
     }
-  } catch (err) {
-    return json({ error: `Erro ao chamar a OpenAI: ${(err as Error).message}` }, 502);
+
+    if (diagnosis) {
+      const validation = validateDiagnosis(diagnosis);
+      if (validation.ok) {
+        normalizeGut(diagnosis);
+        return json({ diagnosis });
+      }
+      lastError = `Diagnóstico fora do formato esperado: ${validation.errors.join('; ')}`;
+    }
+
+    // Se ainda há tentativas, reforça a instrução e repete uma vez.
+    if (attempt < MAX_ATTEMPTS) {
+      messages.push({
+        role: 'user',
+        content:
+          `Sua resposta anterior foi inválida (${lastError}). ` +
+          'Responda NOVAMENTE apenas com o objeto JSON completo e válido, sem markdown, ' +
+          'sem texto fora do JSON, preenchendo todas as chaves obrigatórias do schema.',
+      });
+    }
   }
 
-  // Parse + validação estrutural.
-  let diagnosis: Record<string, unknown>;
-  try {
-    diagnosis = JSON.parse(content);
-  } catch {
-    return json({ error: 'A OpenAI retornou um JSON inválido.' }, 502);
-  }
-
-  const validation = validateDiagnosis(diagnosis);
-  if (!validation.ok) {
-    return json({ error: `Diagnóstico fora do formato esperado: ${validation.errors.join('; ')}` }, 502);
-  }
-
-  normalizeGut(diagnosis);
-
-  return json({ diagnosis });
+  // Fallback claro após esgotar as tentativas.
+  return json(
+    {
+      error: `Não foi possível obter um diagnóstico válido da IA após ${MAX_ATTEMPTS} tentativas. ${lastError}`,
+      code: 'invalid_ai_response',
+    },
+    502,
+  );
 });

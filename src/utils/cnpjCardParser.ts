@@ -1,5 +1,5 @@
 import type { CnpjCardFields } from '../types/diagnosis';
-import { formatCNPJ, onlyDigits, slugCompare } from './formatting';
+import { formatCNPJ, onlyDigits } from './formatting';
 import { validateUF } from './validation';
 
 /**
@@ -54,16 +54,97 @@ const FIELD_LABELS: Record<keyof CnpjCardFields, string> = {
   data_situacao_cadastral: 'Data da situação cadastral',
 };
 
+/**
+ * Dobra acentos 1:1 (preservando o comprimento) e coloca em caixa alta.
+ * Diferente de slugCompare (que usa NFD e altera o comprimento), aqui os
+ * índices permanecem alinhados com a string original — essencial para
+ * recortar o valor no ponto correto.
+ */
+function foldAccents(s: string): string {
+  return (s ?? '')
+    .replace(/[áàâãäÁÀÂÃÄ]/g, 'A')
+    .replace(/[éèêëÉÈÊË]/g, 'E')
+    .replace(/[íìîïÍÌÎÏ]/g, 'I')
+    .replace(/[óòôõöÓÒÔÕÖ]/g, 'O')
+    .replace(/[úùûüÚÙÛÜ]/g, 'U')
+    .replace(/[çÇ]/g, 'C')
+    .toUpperCase();
+}
+
+/**
+ * Rótulos conhecidos do cartão CNPJ (já dobrados). Usados como fronteira:
+ * quando várias etiquetas caem na mesma linha (comum em PDFs extraídos como
+ * fluxo contínuo), o valor é cortado antes do próximo rótulo, evitando que
+ * um campo "engula" os seguintes.
+ */
+const BOUNDARY_LABELS = [
+  'NUMERO DE INSCRICAO',
+  'NOME EMPRESARIAL',
+  'RAZAO SOCIAL',
+  'TITULO DO ESTABELECIMENTO (NOME DE FANTASIA)',
+  'TITULO DO ESTABELECIMENTO',
+  'NOME DE FANTASIA',
+  'NOME FANTASIA',
+  'DATA DE ABERTURA',
+  'DATA DE INICIO DE ATIVIDADE',
+  'PORTE',
+  'CODIGO E DESCRICAO DA ATIVIDADE ECONOMICA PRINCIPAL',
+  'CODIGO E DESCRICAO DAS ATIVIDADES ECONOMICAS SECUNDARIAS',
+  'ATIVIDADE ECONOMICA PRINCIPAL',
+  'CNAE FISCAL PRINCIPAL',
+  'CNAE PRINCIPAL',
+  'NATUREZA JURIDICA',
+  'LOGRADOURO',
+  'NUMERO',
+  'COMPLEMENTO',
+  'BAIRRO/DISTRITO',
+  'BAIRRO',
+  'CEP',
+  'MUNICIPIO',
+  'ESTADO',
+  'SITUACAO CADASTRAL',
+  'DATA DA SITUACAO CADASTRAL',
+  'MOTIVO DE SITUACAO CADASTRAL',
+  'ENTE FEDERATIVO RESPONSAVEL',
+];
+
+/** Corta o valor no início do próximo rótulo conhecido, se houver. */
+function cutAtNextLabel(value: string, currentLabelFolded: string): string {
+  const folded = foldAccents(value);
+  let cutAt = value.length;
+  for (const label of BOUNDARY_LABELS) {
+    if (label === currentLabelFolded) continue;
+    // Procura o rótulo respeitando fronteira de palavra, para não casar
+    // dentro de outra palavra (ex.: "PORTE" dentro de "TRANSPORTES").
+    let from = 0;
+    for (;;) {
+      const idx = folded.indexOf(label, from);
+      if (idx === -1) break;
+      const before = idx === 0 ? ' ' : folded[idx - 1];
+      const after = folded[idx + label.length] ?? ' ';
+      const wordBoundary = /[^A-Z0-9]/.test(before) && /[^A-Z]/.test(after);
+      if (wordBoundary && idx > 0 && idx < cutAt) {
+        cutAt = idx;
+        break;
+      }
+      from = idx + 1;
+    }
+  }
+  return value.slice(0, cutAt);
+}
+
 /** Encontra o valor após um rótulo em uma linha do tipo "RÓTULO: valor". */
 function valueAfterLabel(lines: string[], labels: string[]): string {
   for (const line of lines) {
-    const normalized = slugCompare(line);
+    const foldedLine = foldAccents(line); // índices alinhados com `line`
     for (const label of labels) {
-      const idx = normalized.indexOf(slugCompare(label));
+      const foldedLabel = foldAccents(label);
+      const idx = foldedLine.indexOf(foldedLabel);
       if (idx !== -1) {
-        // Recorta na posição correspondente do texto original
         const afterLabel = line.slice(idx + label.length);
-        const cleaned = afterLabel.replace(/^[\s:.-]+/, '').trim();
+        // Corta antes do próximo rótulo (evita capturar campos seguintes).
+        const bounded = cutAtNextLabel(afterLabel, foldedLabel);
+        const cleaned = bounded.replace(/^[\s:.-]+/, '').trim();
         if (cleaned) return cleaned;
       }
     }

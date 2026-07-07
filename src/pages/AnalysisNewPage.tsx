@@ -15,8 +15,7 @@ import { documentService } from '../services/documentService';
 import { aiService } from '../services/aiService';
 import { classifyCompany } from '../services/classificationService';
 import { parseCnpjCardText } from '../utils/cnpjCardParser';
-import { extractTextFromFile } from '../services/pdfExtractService';
-import { checkMinimumDataForDiagnosis } from '../utils/validation';
+import { checkMinimumDataForDiagnosis, sanitizeText } from '../utils/validation';
 import { ECONOMIC_PROFILE_LABELS } from '../utils/impact';
 import { isDemo } from '../lib/config';
 import { SAMPLE_CNPJ_CARD_TEXT } from '../data/sampleData';
@@ -65,6 +64,9 @@ export function AnalysisNewPage() {
   const [profileOverride, setProfileOverride] = useState<EconomicProfile | ''>('');
 
   const [generating, setGenerating] = useState(false);
+  // Reaproveitados em retentativas para não duplicar registros/uploads.
+  const [createdAnalysisId, setCreatedAnalysisId] = useState<string | null>(null);
+  const [docUploaded, setDocUploaded] = useState(false);
 
   const selectedCompany = useMemo(
     () => companies?.find((c) => c.id === companyId) ?? null,
@@ -94,6 +96,8 @@ export function AnalysisNewPage() {
     setFileName(file.name);
     setUploadedFile(file);
     try {
+      // PDF.js é pesado: carregado sob demanda apenas ao processar um arquivo.
+      const { extractTextFromFile } = await import('../services/pdfExtractService');
       const result = await extractTextFromFile(file);
       if (result.text) {
         setInputText((prev) => (prev.trim() ? `${prev}\n\n${result.text}` : result.text));
@@ -163,6 +167,9 @@ export function AnalysisNewPage() {
     }
 
     setGenerating(true);
+    // Sanitiza o texto do cartão (remove nulos, limita tamanho) antes de
+    // persistir e enviar à IA.
+    const safeInputText = sanitizeText(inputText);
     const extraction: ExtractionResult = {
       document_quality: isDemo ? 'ficticio' : 'oficial',
       confidence_level: 'medio',
@@ -175,33 +182,42 @@ export function AnalysisNewPage() {
       warnings: isDemo ? ['Modo demonstração: dados podem ser fictícios.'] : [],
     };
 
+    // Mantém o id do registro entre tentativas para não duplicar.
+    let analysisId = createdAnalysisId;
+
     try {
       // Atualiza o cadastro da empresa com os dados revisados.
       await syncCompany(selectedCompany, fields);
 
-      // Cria a análise (rascunho → processando).
-      const analysis = await analysisService.create({
-        company_id: selectedCompany.id,
-        title: title.trim() || `Diagnóstico — ${selectedCompany.razao_social ?? 'empresa'}`,
-        analysis_type: ANALYSIS_TYPE,
-        input_text: inputText,
-      });
-      await analysisService.update(analysis.id, {
+      // Cria a análise apenas na primeira tentativa; reaproveita nas demais.
+      if (!analysisId) {
+        const analysis = await analysisService.create({
+          company_id: selectedCompany.id,
+          title: title.trim() || `Diagnóstico — ${selectedCompany.razao_social ?? 'empresa'}`,
+          analysis_type: ANALYSIS_TYPE,
+          input_text: safeInputText,
+        });
+        analysisId = analysis.id;
+        setCreatedAnalysisId(analysisId);
+      }
+      await analysisService.update(analysisId, {
         status: 'processando',
         extracted_data: extraction,
         classification: effectiveClassification,
+        error_message: null,
       });
 
-      // Salva o documento (se houver) no storage privado.
-      if (uploadedFile) {
+      // Salva o documento (se houver) uma única vez, no storage privado.
+      if (uploadedFile && !docUploaded) {
         try {
           await documentService.upload({
             file: uploadedFile,
             companyId: selectedCompany.id,
-            analysisId: analysis.id,
-            extractedText: inputText,
+            analysisId,
+            extractedText: safeInputText,
             extractionStatus: 'processado',
           });
+          setDocUploaded(true);
         } catch (docErr) {
           // Falha de upload não impede o diagnóstico.
           notify(`Documento não pôde ser salvo: ${(docErr as Error).message}`, 'error');
@@ -213,20 +229,35 @@ export function AnalysisNewPage() {
         company: selectedCompany,
         extraction,
         classification: effectiveClassification,
-        input_text: inputText,
+        input_text: safeInputText,
       });
 
-      await analysisService.update(analysis.id, {
+      await analysisService.update(analysisId, {
         status: 'em_revisao',
         diagnosis,
         impact_level: diagnosis.executive_summary.impact_level,
         confidence_level: extraction.confidence_level,
+        error_message: null,
       });
 
       notify('Diagnóstico gerado com sucesso.', 'success');
-      navigate(`/analises/${analysis.id}`);
+      navigate(`/analises/${analysisId}`);
     } catch (err) {
-      notify(`Falha ao gerar diagnóstico: ${(err as Error).message}`, 'error');
+      const message = (err as Error).message;
+      // Fallback claro: marca a análise como "erro" (não fica presa em
+      // "processando") para que o histórico e a tela de detalhe mostrem o
+      // estado corretamente. O usuário pode tentar gerar novamente.
+      if (analysisId) {
+        try {
+          await analysisService.update(analysisId, {
+            status: 'erro',
+            error_message: message,
+          });
+        } catch {
+          // ignora falha ao registrar o erro
+        }
+      }
+      notify(`Falha ao gerar diagnóstico: ${message}`, 'error');
     } finally {
       setGenerating(false);
     }
