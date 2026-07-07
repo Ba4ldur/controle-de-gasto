@@ -1,0 +1,40 @@
+# Configuração do projeto Supabase (CLI).
+# Substitua "project_id" pelo ref do seu projeto ao vincular:
+#   supabase link --project-ref <SEU_PROJECT_REF>
+
+project_id = "attivare-reforma-intelligence"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+# URL do site para links de confirmação/recuperação de senha.
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[storage]
+enabled = true
+file_size_limit = "20MiB"
+
+# A Edge Function exige JWT válido (o app envia o token do usuário logado).
+[functions.generate-diagnosis]
+verify_jwt = true
